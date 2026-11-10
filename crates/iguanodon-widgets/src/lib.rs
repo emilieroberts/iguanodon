@@ -1190,16 +1190,39 @@ impl StandardBenchmarkApp {
         let panel_alpha = if is_compose_ui {
             1.0
         } else if is_dark_mode {
-            0.66
+            0.36
+        } else {
+            0.32
+        };
+        let elem_alpha = if is_compose_ui {
+            1.0
+        } else if is_dark_mode {
+            0.50
         } else {
             0.46
+        };
+        let btn_alpha = if is_compose_ui {
+            1.0
+        } else if is_dark_mode {
+            0.58
+        } else {
+            0.54
+        };
+        let subtle_glass_mat = if is_compose_ui {
+            ShaderMaterialId::StandardSdf
+        } else if base_material == ShaderMaterialId::ObsidianNeonPulse {
+            ShaderMaterialId::ObsidianNeonPulse
+        } else if base_material == ShaderMaterialId::FluentRevealHighlight {
+            ShaderMaterialId::FluentRevealHighlight
+        } else {
+            ShaderMaterialId::SubtleGlassReflection
         };
         let panel_material = if is_compose_ui {
             ShaderMaterialId::StandardSdf
         } else if base_material == ShaderMaterialId::ObsidianNeonPulse {
             ShaderMaterialId::ObsidianNeonPulse
         } else {
-            ShaderMaterialId::FrostedGlass
+            ShaderMaterialId::SubtleGlassReflection
         };
         for &panel in &[TOP_BAR, LEFT_COL, MID_COL, RIGHT_COL] {
             if let Some(r) = self.layout.bounds(panel) {
@@ -1239,16 +1262,16 @@ impl StandardBenchmarkApp {
                 let is_active_toggle = (top_btn == POWER_BTN && is_eco)
                     || (top_btn == RENDERER_BTN && !is_compose_ui);
                 let fill_start = if is_active_toggle {
-                    th.colors.primary_container.to_array()
+                    th.colors.primary_container.with_alpha(btn_alpha).to_array()
                 } else {
-                    th.colors.surface_container.to_array()
+                    th.colors.surface_container.with_alpha(elem_alpha).to_array()
                 };
                 out.push(SdfPrimitiveInstance {
                     rect: r.to_array(),
                     corner_radii: [th.shapes.radius_sm; 4],
                     clip_rect: full_clip,
                     fill_color_start: fill_start,
-                    fill_color_end: th.colors.surface.to_array(),
+                    fill_color_end: th.colors.surface.with_alpha(elem_alpha).to_array(),
                     border_color: th.colors.accent_glow.to_array(),
                     shadow_color: [0.0, 0.0, 0.0, 0.35],
                     params: [
@@ -1256,7 +1279,7 @@ impl StandardBenchmarkApp {
                         if is_eco { 2.0 } else { 6.0 },
                         p,
                         pack_material_and_border(
-                            base_material,
+                            subtle_glass_mat,
                             filter_border(BorderShaderEffect::GentleSmokeBorder),
                         ),
                     ],
@@ -1276,8 +1299,8 @@ impl StandardBenchmarkApp {
                 rect: btn_rect,
                 corner_radii: [morph_r.max(4.0); 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.primary.to_array(),
-                fill_color_end: th.colors.secondary.to_array(),
+                fill_color_start: th.colors.primary.with_alpha(btn_alpha).to_array(),
+                fill_color_end: th.colors.secondary.with_alpha(btn_alpha).to_array(),
                 border_color: th.colors.accent_glow.to_array(),
                 shadow_color: [0.0, 0.0, 0.0, 0.35],
                 params: [
@@ -1285,7 +1308,7 @@ impl StandardBenchmarkApp {
                     8.0,
                     p,
                     pack_material_and_border(
-                        base_material,
+                        subtle_glass_mat,
                         filter_border(BorderShaderEffect::FireBorder),
                     ),
                 ],
@@ -1296,7 +1319,7 @@ impl StandardBenchmarkApp {
             let mat = if self.fire_shader_enabled && !is_compose_ui && !is_eco {
                 ShaderMaterialId::ProceduralFire
             } else {
-                base_material
+                subtle_glass_mat
             };
             let btn_rect = if is_compose_ui {
                 r.to_array()
@@ -1307,8 +1330,8 @@ impl StandardBenchmarkApp {
                 rect: btn_rect,
                 corner_radii: [th.shapes.radius_md; 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.primary_container.to_array(),
-                fill_color_end: th.colors.tertiary.to_array(),
+                fill_color_start: th.colors.primary_container.with_alpha(btn_alpha).to_array(),
+                fill_color_end: th.colors.tertiary.with_alpha(btn_alpha).to_array(),
                 border_color: th.colors.accent_glow.to_array(),
                 shadow_color: [1.0, 0.35, 0.05, 0.5],
                 params: [
@@ -1329,8 +1352,8 @@ impl StandardBenchmarkApp {
                 rect: r.to_array(),
                 corner_radii: [th.shapes.radius_sm; 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.surface_container.to_array(),
-                fill_color_end: th.colors.surface.to_array(),
+                fill_color_start: th.colors.surface_container.with_alpha(elem_alpha).to_array(),
+                fill_color_end: th.colors.surface.with_alpha(elem_alpha).to_array(),
                 border_color: th.colors.outline.to_array(),
                 shadow_color: [0.0; 4],
                 params: [
@@ -1338,7 +1361,7 @@ impl StandardBenchmarkApp {
                     0.0,
                     p,
                     pack_material_and_border(
-                        base_material,
+                        subtle_glass_mat,
                         filter_border(BorderShaderEffect::GentleSmokeBorder),
                     ),
                 ],
@@ -1349,8 +1372,8 @@ impl StandardBenchmarkApp {
                 rect: sb.track_rect.to_array(),
                 corner_radii: [4.0; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.surface_bright.with_alpha(0.4).to_array(),
-                fill_color_end: th.colors.surface_bright.with_alpha(0.4).to_array(),
+                fill_color_start: th.colors.surface_bright.with_alpha(0.35).to_array(),
+                fill_color_end: th.colors.surface_bright.with_alpha(0.35).to_array(),
                 border_color: [0.0; 4],
                 shadow_color: [0.0; 4],
                 params: [0.0, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
@@ -1362,8 +1385,8 @@ impl StandardBenchmarkApp {
                 rect: thumb_arr,
                 corner_radii: [4.0; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.primary.to_array(),
-                fill_color_end: th.colors.accent_glow.to_array(),
+                fill_color_start: th.colors.primary.with_alpha(0.75).to_array(),
+                fill_color_end: th.colors.accent_glow.with_alpha(0.75).to_array(),
                 border_color: [0.0; 4],
                 shadow_color: [0.0; 4],
                 params: [0.0, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
@@ -1378,19 +1401,19 @@ impl StandardBenchmarkApp {
                 item_r.y -= overscroll_y;
                 let is_selected = self.selected_lazy_item == Some(item_idx);
                 let fill = if is_selected {
-                    th.colors.primary_container
+                    th.colors.primary_container.with_alpha(btn_alpha)
                 } else {
-                    th.colors.surface_bright
+                    th.colors.surface_bright.with_alpha(elem_alpha)
                 };
                 out.push(SdfPrimitiveInstance {
                     rect: item_r.to_array(),
                     corner_radii: [th.shapes.radius_sm; 4],
                     clip_rect: r.to_array(),
                     fill_color_start: fill.to_array(),
-                    fill_color_end: th.colors.surface_container.to_array(),
+                    fill_color_end: th.colors.surface_container.with_alpha(elem_alpha).to_array(),
                     border_color: th.colors.outline.to_array(),
                     shadow_color: [0.0; 4],
-                    params: [th.shapes.border_width, 0.0, p, base_material as u32 as f32],
+                    params: [th.shapes.border_width, 0.0, p, subtle_glass_mat as u32 as f32],
                 });
             }
             if overscroll_y.abs() > 1.0 {
@@ -1404,8 +1427,8 @@ impl StandardBenchmarkApp {
                     rect: [r.x + 6.0, glow_y, (r.width - 24.0).max(16.0), glow_h],
                     corner_radii: [glow_h * 0.5; 4],
                     clip_rect: r.to_array(),
-                    fill_color_start: th.colors.primary.with_alpha(0.75).to_array(),
-                    fill_color_end: th.colors.accent_glow.with_alpha(0.75).to_array(),
+                    fill_color_start: th.colors.primary.with_alpha(0.65).to_array(),
+                    fill_color_end: th.colors.accent_glow.with_alpha(0.65).to_array(),
                     border_color: [0.0; 4],
                     shadow_color: [0.0; 4],
                     params: [
@@ -1421,8 +1444,8 @@ impl StandardBenchmarkApp {
                 rect: sb.track_rect.to_array(),
                 corner_radii: [4.0; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.surface_container.to_array(),
-                fill_color_end: th.colors.surface_container.to_array(),
+                fill_color_start: th.colors.surface_container.with_alpha(0.40).to_array(),
+                fill_color_end: th.colors.surface_container.with_alpha(0.40).to_array(),
                 border_color: [0.0; 4],
                 shadow_color: [0.0; 4],
                 params: [0.0, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
@@ -1431,8 +1454,8 @@ impl StandardBenchmarkApp {
                 rect: sb.thumb_rect.to_array(),
                 corner_radii: [4.0; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.primary.to_array(),
-                fill_color_end: th.colors.accent_glow.to_array(),
+                fill_color_start: th.colors.primary.with_alpha(0.75).to_array(),
+                fill_color_end: th.colors.accent_glow.with_alpha(0.75).to_array(),
                 border_color: [0.0; 4],
                 shadow_color: [0.0; 4],
                 params: [0.0, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
@@ -1445,19 +1468,19 @@ impl StandardBenchmarkApp {
                 rect: r.to_array(),
                 corner_radii: [r.height * 0.5; 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.surface_bright.to_array(),
-                fill_color_end: th.colors.surface_bright.to_array(),
+                fill_color_start: th.colors.surface_bright.with_alpha(elem_alpha).to_array(),
+                fill_color_end: th.colors.surface_bright.with_alpha(elem_alpha).to_array(),
                 border_color: th.colors.outline.to_array(),
                 shadow_color: [0.0; 4],
-                params: [th.shapes.border_width, 0.0, 2.0, base_material as u32 as f32],
+                params: [th.shapes.border_width, 0.0, 2.0, subtle_glass_mat as u32 as f32],
             });
             let fill_w = (r.width * self.progress_spring.value.clamp(0.0, 1.0)).max(4.0);
             out.push(SdfPrimitiveInstance {
                 rect: [r.x, r.y, fill_w, r.height],
                 corner_radii: [r.height * 0.5; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.primary.to_array(),
-                fill_color_end: th.colors.accent_glow.to_array(),
+                fill_color_start: th.colors.primary.with_alpha(0.68).to_array(),
+                fill_color_end: th.colors.accent_glow.with_alpha(0.68).to_array(),
                 border_color: [0.0; 4],
                 shadow_color: [0.0; 4],
                 params: [
@@ -1476,8 +1499,8 @@ impl StandardBenchmarkApp {
                 rect: [seg_x, r.y, seg_w, r.height],
                 corner_radii: [r.height * 0.5; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.secondary.to_array(),
-                fill_color_end: th.colors.tertiary.to_array(),
+                fill_color_start: th.colors.secondary.with_alpha(0.68).to_array(),
+                fill_color_end: th.colors.tertiary.with_alpha(0.68).to_array(),
                 border_color: th.colors.outline.to_array(),
                 shadow_color: [0.0; 4],
                 params: [
@@ -1489,7 +1512,7 @@ impl StandardBenchmarkApp {
             });
         }
 
-        // 6. Drag & Drop Source Cards and Drop Target Bucket (Showcasing Flowing Gradient + Fire Border, Pulsing Lights + Smoke Border, Reflective Glass + Smoke Border)
+        // 6. Drag & Drop Source Cards and Drop Target Bucket (Showcasing Flowing Gradient + Fire Border, Pulsing Lights + Smoke Border, Subtle Glass Reflection + Smoke Border)
         for &card in &[DRAGGABLE_CARD_A, DRAGGABLE_CARD_B, DROP_TARGET_BUCKET] {
             if let Some(r) = self.layout.bounds(card) {
                 let is_drop_bucket = card == DROP_TARGET_BUCKET;
@@ -1502,20 +1525,20 @@ impl StandardBenchmarkApp {
                     DRAGGABLE_CARD_A => (
                         ShaderMaterialId::FlowingGentleGradient,
                         BorderShaderEffect::FireBorder,
-                        [0.98, 0.84, 0.22, 0.90],
-                        [1.0, 0.98, 0.88, 0.90],
+                        [0.98, 0.84, 0.22, elem_alpha + 0.08],
+                        [1.0, 0.98, 0.88, elem_alpha + 0.08],
                     ),
                     DRAGGABLE_CARD_B => (
                         ShaderMaterialId::GentlePulsingLights,
                         BorderShaderEffect::GentleSmokeBorder,
-                        th.colors.surface_bright.to_array(),
-                        th.colors.surface_container.to_array(),
+                        th.colors.surface_bright.with_alpha(elem_alpha).to_array(),
+                        th.colors.surface_container.with_alpha(elem_alpha).to_array(),
                     ),
                     _ => (
-                        ShaderMaterialId::ReflectiveGlass,
+                        ShaderMaterialId::SubtleGlassReflection,
                         BorderShaderEffect::GentleSmokeBorder,
-                        th.colors.surface_bright.to_array(),
-                        th.colors.surface_container.to_array(),
+                        th.colors.surface_bright.with_alpha(elem_alpha).to_array(),
+                        th.colors.surface_container.with_alpha(elem_alpha).to_array(),
                     ),
                 };
                 let card_mat = if is_compose_ui {
@@ -1548,8 +1571,8 @@ impl StandardBenchmarkApp {
                 rect: r.to_array(),
                 corner_radii: [th.shapes.radius_md; 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.surface_container.to_array(),
-                fill_color_end: th.colors.surface.to_array(),
+                fill_color_start: th.colors.surface_container.with_alpha(elem_alpha).to_array(),
+                fill_color_end: th.colors.surface.with_alpha(elem_alpha).to_array(),
                 border_color: th.colors.accent_glow.to_array(),
                 shadow_color: [0.0, 0.0, 0.0, 0.35],
                 params: [
@@ -1557,7 +1580,7 @@ impl StandardBenchmarkApp {
                     if is_eco { 2.0 } else { 6.0 },
                     p,
                     pack_material_and_border(
-                        base_material,
+                        subtle_glass_mat,
                         filter_border(BorderShaderEffect::GentleSmokeBorder),
                     ),
                 ],
@@ -1571,8 +1594,8 @@ impl StandardBenchmarkApp {
                 rect: [track_x, track_y, track_w, track_h],
                 corner_radii: [4.0; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.surface_bright.to_array(),
-                fill_color_end: th.colors.surface_bright.to_array(),
+                fill_color_start: th.colors.surface_bright.with_alpha(elem_alpha).to_array(),
+                fill_color_end: th.colors.surface_bright.with_alpha(elem_alpha).to_array(),
                 border_color: [0.0; 4],
                 shadow_color: [0.0; 4],
                 params: [0.0, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
@@ -1582,8 +1605,8 @@ impl StandardBenchmarkApp {
                 rect: [track_x, track_y, fill_w, track_h],
                 corner_radii: [4.0; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.primary.to_array(),
-                fill_color_end: th.colors.accent_glow.to_array(),
+                fill_color_start: th.colors.primary.with_alpha(0.68).to_array(),
+                fill_color_end: th.colors.accent_glow.with_alpha(0.68).to_array(),
                 border_color: [0.0; 4],
                 shadow_color: [0.0; 4],
                 params: [
@@ -1601,8 +1624,8 @@ impl StandardBenchmarkApp {
                 rect: [thumb_x, thumb_y, thumb_r, thumb_r],
                 corner_radii: [thumb_r * 0.5; 4],
                 clip_rect: r.to_array(),
-                fill_color_start: th.colors.accent_glow.to_array(),
-                fill_color_end: th.colors.primary.to_array(),
+                fill_color_start: th.colors.accent_glow.with_alpha(0.85).to_array(),
+                fill_color_end: th.colors.primary.with_alpha(0.85).to_array(),
                 border_color: th.colors.on_primary.to_array(),
                 shadow_color: [0.0, 0.0, 0.0, 0.45],
                 params: [1.5, 4.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
@@ -1620,8 +1643,8 @@ impl StandardBenchmarkApp {
                 rect: r.to_array(),
                 corner_radii: [th.shapes.radius_sm; 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.surface_container.to_array(),
-                fill_color_end: th.colors.surface.to_array(),
+                fill_color_start: th.colors.surface_container.with_alpha(elem_alpha).to_array(),
+                fill_color_end: th.colors.surface.with_alpha(elem_alpha).to_array(),
                 border_color: border_c.to_array(),
                 shadow_color: [0.0; 4],
                 params: [
@@ -1632,7 +1655,7 @@ impl StandardBenchmarkApp {
                     },
                     0.0,
                     p,
-                    base_material as u32 as f32,
+                    subtle_glass_mat as u32 as f32,
                 ],
             });
             if self.text_field.focused && self.text_field.caret_blink_phase < 0.5 {
@@ -1656,8 +1679,8 @@ impl StandardBenchmarkApp {
                 rect: r.to_array(),
                 corner_radii: [th.shapes.radius_sm; 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.surface_container.to_array(),
-                fill_color_end: th.colors.surface.to_array(),
+                fill_color_start: th.colors.surface_container.with_alpha(elem_alpha).to_array(),
+                fill_color_end: th.colors.surface.with_alpha(elem_alpha).to_array(),
                 border_color: th.colors.outline.to_array(),
                 shadow_color: [0.0; 4],
                 params: [
@@ -1665,7 +1688,7 @@ impl StandardBenchmarkApp {
                     0.0,
                     p,
                     pack_material_and_border(
-                        base_material,
+                        subtle_glass_mat,
                         filter_border(BorderShaderEffect::GentleSmokeBorder),
                     ),
                 ],
@@ -1683,8 +1706,8 @@ impl StandardBenchmarkApp {
                 rect: r.to_array(),
                 corner_radii: [th.shapes.radius_lg; 4],
                 clip_rect: full_clip,
-                fill_color_start: [0.36, 0.78, 0.96, 0.82],
-                fill_color_end: [0.62, 0.50, 0.96, 0.82],
+                fill_color_start: [0.36, 0.78, 0.96, elem_alpha],
+                fill_color_end: [0.62, 0.50, 0.96, elem_alpha],
                 border_color: th.colors.outline.to_array(),
                 shadow_color: [0.0, 0.0, 0.0, 0.45],
                 params: [
@@ -1699,7 +1722,7 @@ impl StandardBenchmarkApp {
             });
         }
 
-        // 10. Animated Spring & Shader Playground Card (Cycles through Gentle Smoke, Pulsing Lights, Reflective Glass, Glowbar, Flowing Gradient, Fire, Water Ripple)
+        // 10. Animated Spring & Shader Playground Card (Cycles through Gentle Smoke, Pulsing Lights, Reflective Glass, Subtle Reflection, Glowbar, Flowing Gradient, Fire, Water Ripple)
         if let Some(r) = self.layout.bounds(ANIMATED_SHADER_CARD) {
             let scale = self.anim_card_scale_spring.value;
             let corner_r = self.anim_card_corner_spring.value;
@@ -1725,8 +1748,8 @@ impl StandardBenchmarkApp {
                 rect: card_rect,
                 corner_radii: [corner_r; 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.primary_container.to_array(),
-                fill_color_end: th.colors.tertiary.to_array(),
+                fill_color_start: th.colors.primary_container.with_alpha(btn_alpha).to_array(),
+                fill_color_end: th.colors.tertiary.with_alpha(btn_alpha).to_array(),
                 border_color: th.colors.accent_glow.to_array(),
                 shadow_color: [0.0, 0.0, 0.0, 0.5],
                 params: [
@@ -1748,14 +1771,14 @@ impl StandardBenchmarkApp {
             } else if base_material == ShaderMaterialId::ObsidianNeonPulse {
                 ShaderMaterialId::ObsidianNeonPulse
             } else {
-                ShaderMaterialId::FrostedGlass
+                ShaderMaterialId::SubtleGlassReflection
             };
             out.push(SdfPrimitiveInstance {
                 rect: r.to_array(),
                 corner_radii: [th.shapes.radius_sm; 4],
                 clip_rect: full_clip,
-                fill_color_start: th.colors.surface_container.to_array(),
-                fill_color_end: th.colors.background.to_array(),
+                fill_color_start: th.colors.surface_container.with_alpha(elem_alpha).to_array(),
+                fill_color_end: th.colors.background.with_alpha(elem_alpha).to_array(),
                 border_color: th.colors.accent_glow.to_array(),
                 shadow_color: [0.0; 4],
                 params: [th.shapes.border_width, 4.0, p, overlay_mat as u32 as f32],

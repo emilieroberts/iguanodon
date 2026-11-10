@@ -1024,7 +1024,8 @@ impl VulkanRenderer {
                     == iguanodon_shaders::ShaderMaterialId::StandardSdf as u32
                     || mat == iguanodon_shaders::ShaderMaterialId::ObsidianNeonPulse as u32
                     || mat == iguanodon_shaders::ShaderMaterialId::TexturedImage as u32
-                    || mat == iguanodon_shaders::ShaderMaterialId::FrostedGlass as u32)
+                    || mat == iguanodon_shaders::ShaderMaterialId::FrostedGlass as u32
+                    || mat == iguanodon_shaders::ShaderMaterialId::SubtleGlassReflection as u32)
                     && ix0 < ix1
                     && by0 < by1;
 
@@ -1133,66 +1134,116 @@ impl VulkanRenderer {
                             row[idx + 3] = 255;
                         }
 
-                        // Constant-Y horizontal span blend across [span_min_x, span_max_x)
-                        // Evaluates foreground + alpha once for the span and blends against EACH pixel's actual backdrop!
-                        let (fg_col, eff_alpha) = if mat
-                            != iguanodon_shaders::ShaderMaterialId::FrostedGlass as u32
+                        if mat == iguanodon_shaders::ShaderMaterialId::SubtleGlassReflection as u32
                         {
+                            let inv_w = 1.0 / inst.rect[2].max(1.0);
                             let uv_y =
                                 ((py - inst.rect[1]) / inst.rect[3].max(1.0)).clamp(0.0, 1.0);
-                            let alpha = (inst.fill_color_start[3]
+                            let base_a = (inst.fill_color_start[3]
                                 + (inst.fill_color_end[3] - inst.fill_color_start[3]) * uv_y)
                                 .clamp(0.0, 1.0);
-                            let fr = (inst.fill_color_start[0]
+                            let base_r = (inst.fill_color_start[0]
                                 + (inst.fill_color_end[0] - inst.fill_color_start[0]) * uv_y)
                                 .clamp(0.0, 1.0);
-                            let fg = (inst.fill_color_start[1]
+                            let base_g = (inst.fill_color_start[1]
                                 + (inst.fill_color_end[1] - inst.fill_color_start[1]) * uv_y)
                                 .clamp(0.0, 1.0);
-                            let fb = (inst.fill_color_start[2]
+                            let base_b = (inst.fill_color_start[2]
                                 + (inst.fill_color_end[2] - inst.fill_color_start[2]) * uv_y)
                                 .clamp(0.0, 1.0);
-                            (Color::rgba(fr, fg, fb, 1.0), alpha)
-                        } else {
-                            iguanodon_shaders::evaluate_sdf_instance_foreground(
-                                inst,
-                                span_min_x as f32 + 0.5,
-                                py,
-                                pointer,
-                                time_sec,
-                            )
-                        };
-
-                        if eff_alpha > 0.002 {
+                            let cx = inst.rect[0] + inst.rect[2] * 0.5;
+                            let cy = inst.rect[1] + inst.rect[3] * 0.5;
+                            let ptr_parallax = ((pointer.x - cx) * 0.00045
+                                + (pointer.y - cy) * 0.00035)
+                                .clamp(-0.16, 0.16);
+                            let top_glint = (1.0 - uv_y).powi(4) * 0.055;
+                            let sweep_step = 0.68 * inv_w;
+                            let mut sweep = ((span_min_x as f32 + 0.5 - inst.rect[0]) * inv_w)
+                                * 0.68
+                                + uv_y * 0.42
+                                - ptr_parallax
+                                + (time_sec * 0.10).sin() * 0.06;
                             let span_slice =
                                 &mut row[(span_min_x as usize * 4)..(span_max_x as usize * 4)];
-                            if eff_alpha >= 0.998 {
-                                let span_rgba = [
-                                    (fg_col.r.clamp(0.0, 1.0) * 255.0) as u8,
-                                    (fg_col.g.clamp(0.0, 1.0) * 255.0) as u8,
-                                    (fg_col.b.clamp(0.0, 1.0) * 255.0) as u8,
-                                    255,
-                                ];
-                                for px_out in span_slice.chunks_exact_mut(4) {
-                                    px_out.copy_from_slice(&span_rgba);
-                                }
-                            } else {
-                                let a256 = (eff_alpha * 256.0).round() as u32;
+                            for px_out in span_slice.chunks_exact_mut(4) {
+                                let b1 = (1.0 - ((sweep - 0.46).abs() * 5.2)).clamp(0.0, 1.0);
+                                let b2 = (1.0 - ((sweep - 0.72).abs() * 9.0)).clamp(0.0, 1.0);
+                                let refl =
+                                    (b1 * b1 * 0.075 + b2 * b2 * 0.040 + top_glint).min(0.14);
+                                let eff_a = (base_a + refl * 0.08).clamp(0.30, 0.78);
+                                let a256 = (eff_a * 256.0) as u32;
                                 let inv_a256 = 256 - a256;
-                                let fg_r_pre =
-                                    (fg_col.r.clamp(0.0, 1.0) * 255.0) as u32 * a256;
-                                let fg_g_pre =
-                                    (fg_col.g.clamp(0.0, 1.0) * 255.0) as u32 * a256;
-                                let fg_b_pre =
-                                    (fg_col.b.clamp(0.0, 1.0) * 255.0) as u32 * a256;
-                                for px_out in span_slice.chunks_exact_mut(4) {
-                                    px_out[0] =
-                                        ((px_out[0] as u32 * inv_a256 + fg_r_pre) >> 8) as u8;
-                                    px_out[1] =
-                                        ((px_out[1] as u32 * inv_a256 + fg_g_pre) >> 8) as u8;
-                                    px_out[2] =
-                                        ((px_out[2] as u32 * inv_a256 + fg_b_pre) >> 8) as u8;
-                                    px_out[3] = 255;
+                                let fr = ((base_r + (0.90 - base_r) * refl) * 255.0) as u32 * a256;
+                                let fg = ((base_g + (0.96 - base_g) * refl) * 255.0) as u32 * a256;
+                                let fb = ((base_b + (1.00 - base_b) * refl) * 255.0) as u32 * a256;
+                                px_out[0] = ((px_out[0] as u32 * inv_a256 + fr) >> 8) as u8;
+                                px_out[1] = ((px_out[1] as u32 * inv_a256 + fg) >> 8) as u8;
+                                px_out[2] = ((px_out[2] as u32 * inv_a256 + fb) >> 8) as u8;
+                                px_out[3] = 255;
+                                sweep += sweep_step;
+                            }
+                        } else {
+                            // Constant-Y horizontal span blend across [span_min_x, span_max_x)
+                            // Evaluates foreground + alpha once for the span and blends against EACH pixel's actual backdrop!
+                            let (fg_col, eff_alpha) = if mat
+                                != iguanodon_shaders::ShaderMaterialId::FrostedGlass as u32
+                            {
+                                let uv_y = ((py - inst.rect[1]) / inst.rect[3].max(1.0))
+                                    .clamp(0.0, 1.0);
+                                let alpha = (inst.fill_color_start[3]
+                                    + (inst.fill_color_end[3] - inst.fill_color_start[3]) * uv_y)
+                                    .clamp(0.0, 1.0);
+                                let fr = (inst.fill_color_start[0]
+                                    + (inst.fill_color_end[0] - inst.fill_color_start[0]) * uv_y)
+                                    .clamp(0.0, 1.0);
+                                let fg = (inst.fill_color_start[1]
+                                    + (inst.fill_color_end[1] - inst.fill_color_start[1]) * uv_y)
+                                    .clamp(0.0, 1.0);
+                                let fb = (inst.fill_color_start[2]
+                                    + (inst.fill_color_end[2] - inst.fill_color_start[2]) * uv_y)
+                                    .clamp(0.0, 1.0);
+                                (Color::rgba(fr, fg, fb, 1.0), alpha)
+                            } else {
+                                iguanodon_shaders::evaluate_sdf_instance_foreground(
+                                    inst,
+                                    span_min_x as f32 + 0.5,
+                                    py,
+                                    pointer,
+                                    time_sec,
+                                )
+                            };
+
+                            if eff_alpha > 0.002 {
+                                let span_slice = &mut row
+                                    [(span_min_x as usize * 4)..(span_max_x as usize * 4)];
+                                if eff_alpha >= 0.998 {
+                                    let span_rgba = [
+                                        (fg_col.r.clamp(0.0, 1.0) * 255.0) as u8,
+                                        (fg_col.g.clamp(0.0, 1.0) * 255.0) as u8,
+                                        (fg_col.b.clamp(0.0, 1.0) * 255.0) as u8,
+                                        255,
+                                    ];
+                                    for px_out in span_slice.chunks_exact_mut(4) {
+                                        px_out.copy_from_slice(&span_rgba);
+                                    }
+                                } else {
+                                    let a256 = (eff_alpha * 256.0).round() as u32;
+                                    let inv_a256 = 256 - a256;
+                                    let fg_r_pre =
+                                        (fg_col.r.clamp(0.0, 1.0) * 255.0) as u32 * a256;
+                                    let fg_g_pre =
+                                        (fg_col.g.clamp(0.0, 1.0) * 255.0) as u32 * a256;
+                                    let fg_b_pre =
+                                        (fg_col.b.clamp(0.0, 1.0) * 255.0) as u32 * a256;
+                                    for px_out in span_slice.chunks_exact_mut(4) {
+                                        px_out[0] = ((px_out[0] as u32 * inv_a256 + fg_r_pre) >> 8)
+                                            as u8;
+                                        px_out[1] = ((px_out[1] as u32 * inv_a256 + fg_g_pre) >> 8)
+                                            as u8;
+                                        px_out[2] = ((px_out[2] as u32 * inv_a256 + fg_b_pre) >> 8)
+                                            as u8;
+                                        px_out[3] = 255;
+                                    }
                                 }
                             }
                         }

@@ -95,7 +95,7 @@ fun StandardBenchmarkApp() {
             DropTarget(
                 onDrop = { id -> droppedPayloads = droppedPayloads + id },
                 nodeId = BenchNodeIds.DROP_TARGET_BUCKET,
-                modifier = Modifier.frostedGlass(blurRadius = 16f),
+                modifier = Modifier.subtleReflection(),
             ) {
                 Label("Drop Target Zone (${droppedPayloads.size} accepted)")
             }

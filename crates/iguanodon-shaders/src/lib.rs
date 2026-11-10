@@ -40,13 +40,15 @@ pub enum ShaderMaterialId {
     ColorCyclingGlowbar = 10,
     FlowingGentleGradient = 11,
     ElectricJellyfish = 12,
+    SubtleGlassReflection = 13,
 }
 
 impl ShaderMaterialId {
     /// Interactive shader presets that can be cycled in the Standard Benchmark Sample App.
-    pub const SHOWCASE_PRESETS: [Self; 9] = [
+    pub const SHOWCASE_PRESETS: [Self; 10] = [
         Self::ProceduralFire,
         Self::ElectricJellyfish,
+        Self::SubtleGlassReflection,
         Self::GentleSmoke,
         Self::GentlePulsingLights,
         Self::ReflectiveGlass,
@@ -71,6 +73,7 @@ impl ShaderMaterialId {
             10 => Self::ColorCyclingGlowbar,
             11 => Self::FlowingGentleGradient,
             12 => Self::ElectricJellyfish,
+            13 => Self::SubtleGlassReflection,
             _ => Self::StandardSdf,
         }
     }
@@ -90,6 +93,7 @@ impl ShaderMaterialId {
             Self::ColorCyclingGlowbar => "Color Glowbar",
             Self::FlowingGentleGradient => "Flowing Gradient",
             Self::ElectricJellyfish => "Electric Jellyfish",
+            Self::SubtleGlassReflection => "Subtle Reflection",
         }
     }
 }
@@ -391,6 +395,10 @@ pub fn flowing_gradient_spirv() -> Vec<u32> {
 
 pub fn electric_jellyfish_spirv() -> Vec<u32> {
     build_vulkan_compute_spirv(0x4A454C59) // "JELY"
+}
+
+pub fn subtle_glass_reflection_spirv() -> Vec<u32> {
+    build_vulkan_compute_spirv(0x5352464C) // "SRFL"
 }
 
 /// Smooth 3-term cosine spectrum color ramp for the Color-Cycling Glowbar (`hue in [0.0, 1.0]`).
@@ -1207,11 +1215,11 @@ pub fn evaluate_electric_jellyfish_backdrop(
     let drift_phase = t_sec * (std::f32::consts::TAU / 22.0);
     let pulse_phase = t_sec * (std::f32::consts::TAU / 6.0);
 
-    let outer_alpha = if dark_theme { 0.34 } else { 0.48 };
-    let mid_alpha = if dark_theme { 0.22 } else { 0.32 };
-    let rim_alpha = if dark_theme { 0.10 } else { 0.16 };
-    let core_white_alpha = if dark_theme { 0.22 } else { 0.42 };
-    let core_tint_alpha = if dark_theme { 0.38 } else { 0.46 };
+    let outer_alpha = if dark_theme { 0.62 } else { 0.60 };
+    let mid_alpha = if dark_theme { 0.44 } else { 0.42 };
+    let rim_alpha = if dark_theme { 0.20 } else { 0.24 };
+    let core_white_alpha = if dark_theme { 0.48 } else { 0.54 };
+    let core_tint_alpha = if dark_theme { 0.64 } else { 0.58 };
 
     for b in &blooms {
         let angle = drift_phase * b.speed_mul + b.phase_offset;
@@ -1262,7 +1270,7 @@ pub fn evaluate_electric_jellyfish_backdrop(
                     (0x13 as f32 + (0x19 as f32 - 0x13 as f32) * u) / 255.0,
                     (0x26 as f32 + (0x33 as f32 - 0x26 as f32) * u) / 255.0,
                 ],
-                0.48 + (0.40 - 0.48) * u,
+                0.28 + (0.22 - 0.28) * u,
             )
         } else {
             let u = (uv_y - 0.5) * 2.0;
@@ -1272,7 +1280,7 @@ pub fn evaluate_electric_jellyfish_backdrop(
                     (0x19 as f32 + (0x10 as f32 - 0x19 as f32) * u) / 255.0,
                     (0x33 as f32 + (0x22 as f32 - 0x33 as f32) * u) / 255.0,
                 ],
-                0.40 + (0.50 - 0.40) * u,
+                0.22 + (0.30 - 0.22) * u,
             )
         }
     } else if uv_y < 0.5 {
@@ -1545,12 +1553,12 @@ pub fn evaluate_sdf_instance_foreground(
             let lut = FireSimulationLut::global();
             let grain = (lut.sample_turbulence(px * 0.12 + t_sec * 0.35, py * 0.12) - 0.5) * 0.035;
             // Crystalline specular sheen near the top edge of Frosted Glass
-            let sheen = (1.0 - uv_y).powi(3) * 0.08;
+            let sheen = (1.0 - uv_y).powi(3) * 0.06;
             fill = Color::rgba(
                 (fill.r + grain + sheen).clamp(0.0, 1.0),
                 (fill.g + grain + sheen).clamp(0.0, 1.0),
                 (fill.b + grain + sheen * 1.2).clamp(0.0, 1.0),
-                fill.a.clamp(0.52, 0.84),
+                fill.a.clamp(0.28, 0.78),
             );
         }
         x if x == ShaderMaterialId::ProceduralFire as u32 => {
@@ -1581,12 +1589,12 @@ pub fn evaluate_sdf_instance_foreground(
                 0.0
             };
 
-            let charcoal_base = Color::rgba(0.11, 0.04, 0.05, fill.a.max(0.90));
+            let charcoal_base = Color::rgba(0.11, 0.04, 0.05, fill.a.clamp(0.58, 0.86));
             let ember_blend = (temp * 0.90).clamp(0.18, 0.94);
             let mut fire_fill = charcoal_base
                 .lerp(fire_col, ember_blend)
                 .lerp(Color::rgba(1.0, 0.95, 0.78, 1.0), spark_intensity * 0.85);
-            fire_fill.a = 0.94;
+            fire_fill.a = fill.a.clamp(0.62, 0.85);
             fill = fire_fill;
         }
         x if x == ShaderMaterialId::WaterRipple as u32 => {
@@ -1648,7 +1656,7 @@ pub fn evaluate_sdf_instance_foreground(
             };
             let prev_a = fill.a;
             fill = fill.lerp(plume_color, density * 0.68);
-            fill.a = (prev_a * 0.82 + density * 0.16).clamp(0.62, 0.94);
+            fill.a = (prev_a * 0.88 + density * 0.12).clamp(0.38, 0.84);
         }
         x if x == ShaderMaterialId::GentlePulsingLights as u32 => {
             // 2. Gently Pulsing Lights: Three soft phase-offset breathing ambient bokeh light orbs (slow & calm)
@@ -1691,7 +1699,7 @@ pub fn evaluate_sdf_instance_foreground(
                 (fill.r + add_r).clamp(0.0, 1.0),
                 (fill.g + add_g).clamp(0.0, 1.0),
                 (fill.b + add_b).clamp(0.0, 1.0),
-                fill.a.clamp(0.76, 0.95),
+                fill.a.clamp(0.42, 0.82),
             );
         }
         x if x == ShaderMaterialId::ReflectiveGlass as u32 => {
@@ -1709,28 +1717,46 @@ pub fn evaluate_sdf_instance_foreground(
 
             let sky_spec = Color::rgba(0.92, 0.97, 1.0, 1.0);
             let mut glass = fill.lerp(sky_spec, refl);
-            glass.a = (fill.a * 0.72 + refl * 0.25).clamp(0.60, 0.88);
+            glass.a = (fill.a * 0.78 + refl * 0.20).clamp(0.38, 0.80);
+            fill = glass;
+        }
+        x if x == ShaderMaterialId::SubtleGlassReflection as u32 => {
+            // 4. Subtle Glass Reflection: Whisper-soft diagonal optical sheen + faint top glint (much more subtle than ReflectiveGlass)
+            let ptr_parallax = ((pointer.x - cx) * 0.00045 + (pointer.y - cy) * 0.00035).clamp(-0.16, 0.16);
+            let sweep = uv_x * 0.68 + uv_y * 0.42 - ptr_parallax + (t_sec * 0.10).sin() * 0.06;
+            let b1 = (1.0 - ((sweep - 0.46).abs() * 5.2)).clamp(0.0, 1.0);
+            let b2 = (1.0 - ((sweep - 0.72).abs() * 9.0)).clamp(0.0, 1.0);
+            let spec_band = b1 * b1 * 0.075 + b2 * b2 * 0.040;
+
+            let edge_t = (1.0 - (-dist * (1.0 / 12.0)).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+            let fresnel_rim = edge_t * edge_t * edge_t * 0.075;
+            let top_glint = (1.0 - uv_y).powi(4) * 0.055;
+            let refl = (spec_band + fresnel_rim + top_glint).clamp(0.0, 0.14);
+
+            let sky_spec = Color::rgba(0.90, 0.96, 1.0, 1.0);
+            let mut glass = fill.lerp(sky_spec, refl);
+            glass.a = (fill.a + refl * 0.08).clamp(0.30, 0.78);
             fill = glass;
         }
         x if x == ShaderMaterialId::ColorCyclingGlowbar as u32 => {
-            // 4. Glowbar That Slowly Changes Colours: Smooth cosine spectrum + luminous core
+            // 5. Glowbar That Slowly Changes Colours: Smooth cosine spectrum + luminous core
             let hue = (t_sec * 0.065 + uv_x * 0.38).rem_euclid(1.0);
             let spec = color_cycling_spectrum(hue);
             let core_y = (1.0 - (uv_y - 0.5).abs() * 1.75).clamp(0.0, 1.0);
             let core_boost = core_y * core_y * 0.48;
             let mut glow = fill.lerp(spec, 0.82).lerp(Color::WHITE, core_boost);
-            glow.a = fill.a.max(0.92);
+            glow.a = fill.a.clamp(0.55, 0.86);
             fill = glow;
         }
         x if x == ShaderMaterialId::FlowingGentleGradient as u32 => {
-            // 5. Gentle Gradient That Slowly Moves (endless left-to-right yellow -> buttercream -> white loop)
+            // 6. Gentle Gradient That Slowly Moves (endless left-to-right yellow -> buttercream -> white loop)
             let grad = flowing_yellow_white_gradient(uv_x, uv_y, t_sec, start_c);
             let mut out_c = fill.lerp(grad, 0.86);
-            out_c.a = fill.a.max(0.90);
+            out_c.a = fill.a.clamp(0.50, 0.82);
             fill = out_c;
         }
         x if x == ShaderMaterialId::ElectricJellyfish as u32 => {
-            // 6. Electric Jellyfish Backdrop: Deep abyssal blue + drifting pulsing bioluminescent jellyfish blooms behind diffuse frosted glass
+            // 7. Electric Jellyfish Backdrop: Deep abyssal blue + drifting pulsing bioluminescent jellyfish blooms behind diffuse frosted glass
             let avg_luma = (start_c.r + start_c.g + start_c.b + end_c.r + end_c.g + end_c.b) * 0.5;
             let dark_theme = avg_luma < 1.5;
             let mut jelly = evaluate_electric_jellyfish_backdrop(
@@ -1746,7 +1772,7 @@ pub fn evaluate_sdf_instance_foreground(
             jelly.r = (jelly.r + grain).clamp(0.0, 1.0);
             jelly.g = (jelly.g + grain).clamp(0.0, 1.0);
             jelly.b = (jelly.b + grain).clamp(0.0, 1.0);
-            jelly.a = fill.a.max(0.95);
+            jelly.a = fill.a.clamp(0.58, 0.90);
             fill = jelly;
         }
         _ => {}
@@ -1852,6 +1878,7 @@ mod tests {
             color_cycling_glowbar_spirv(),
             flowing_gradient_spirv(),
             electric_jellyfish_spirv(),
+            subtle_glass_reflection_spirv(),
         ] {
             assert_eq!(validate_spirv_binary(&spirv), Ok(()));
         }
@@ -1924,6 +1951,7 @@ mod tests {
             ShaderMaterialId::ColorCyclingGlowbar,
             ShaderMaterialId::FlowingGentleGradient,
             ShaderMaterialId::ElectricJellyfish,
+            ShaderMaterialId::SubtleGlassReflection,
         ] {
             let inst = SdfPrimitiveInstance {
                 rect: [10.0, 10.0, 200.0, 60.0],

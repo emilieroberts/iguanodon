@@ -800,6 +800,7 @@ enum class IguanodonShaderMaterialId(val id: Int, val displayName: String) {
     ColorCyclingGlowbar(10, "Color-Cycling Glowbar"),
     FlowingGentleGradient(11, "Flowing Yellow-White"),
     ElectricJellyfish(12, "Electric Jellyfish"),
+    SubtleGlassReflection(13, "Subtle Reflection"),
 }
 
 fun Modifier.frostedGlass(
@@ -887,6 +888,19 @@ fun Modifier.reflectiveGlass(
     shaderId = IguanodonShaderMaterialId.ReflectiveGlass.id.toByte(),
     shaderP0 = fresnelPower,
     shaderP1 = sheenIntensity,
+)
+
+/**
+ * Applies a whisper-soft, delicate diagonal optical reflection sheen and faint top glint
+ * (`ShaderMaterialId::SubtleGlassReflection = 13`), much more subtle than [reflectiveGlass].
+ */
+fun Modifier.subtleReflection(
+    sheenIntensity: Float = 0.12f,
+    topGlint: Float = 0.055f,
+): Modifier = copyWith(
+    shaderId = IguanodonShaderMaterialId.SubtleGlassReflection.id.toByte(),
+    shaderP0 = sheenIntensity,
+    shaderP1 = topGlint,
 )
 
 fun Modifier.colorCyclingGlowbar(
