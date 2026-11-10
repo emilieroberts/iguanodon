@@ -675,15 +675,24 @@ pub fn apply_commands_to_harness(
             DecodedCommand::SetLabelText { node_id, text } => {
                 if node_id == bench_nodes::HEADLINE_LABEL.index {
                     harness.app.headline_text = text;
-                } else {
+                } else if node_id == bench_nodes::STATUS_LABEL.index {
                     harness.app.status_label_text = text;
                 }
             }
             DecodedCommand::ClickNode { node_id } => {
+                // Suppress echoing a ReverseEventType::Click back to Kotlin when the click came from an FFI command batch
+                let prev_len = harness.pending_reverse_events.len();
                 harness.click_node(NodeId::from_raw(node_id));
+                let mut idx = 0;
+                harness.pending_reverse_events.retain(|ev| {
+                    let keep = idx < prev_len || ev.event_type != ReverseEventType::Click;
+                    idx += 1;
+                    keep
+                });
             }
             DecodedCommand::SetTextFieldValue { text } => {
-                harness.type_into_text_field(true, &text);
+                harness.app.text_field.text = text;
+                harness.app.text_field.cursor_byte = harness.app.text_field.text.len();
             }
             DecodedCommand::ScrollNode { node_id, delta_y } => {
                 harness.scroll_node(NodeId::from_raw(node_id), delta_y);

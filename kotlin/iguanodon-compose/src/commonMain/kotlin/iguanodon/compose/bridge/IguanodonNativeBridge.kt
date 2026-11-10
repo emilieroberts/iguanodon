@@ -406,8 +406,9 @@ class IguanodonSession(
                     }
                 }
                 ReverseEventTypes.WINDOW_RESIZE -> {
-                    viewportWidth = f0.toInt().coerceIn(240, 3840)
-                    viewportHeight = f1.toInt().coerceIn(240, 3840)
+                    // Viewport size is owned by the host surface (`session.resize(w, h)`)
+                    // so a queued reverse resize event never desynchronizes `viewportWidth`/`viewportHeight`
+                    // from the allocated `frameBitmap` and `rgbaBytes` mid-frame.
                 }
                 ReverseEventTypes.SAFE_INSETS -> {
                     safeInsetLeftDp = f0

@@ -203,37 +203,55 @@ class IguanodonVulkanSurfaceView(
         syncSystemBarIconPolarity(darkTheme = (session.currentThemeMode == IguanodonThemeMode.Dark))
     }
 
+    private fun updateViewportAndBuffers(rawWidthPx: Int, rawHeightPx: Int) {
+        if (rawWidthPx <= 0 || rawHeightPx <= 0) return
+        val aspect = rawWidthPx.toFloat() / rawHeightPx.toFloat()
+        val logicalW: Int
+        val logicalH: Int
+        if (rawWidthPx < rawHeightPx) {
+            // Portrait orientation: single-column stack with 1:1 matching framebuffer & layout viewport
+            logicalW = 640
+            logicalH = (logicalW.toFloat() / aspect).toInt().coerceIn(1200, 1560)
+        } else {
+            // Landscape orientation: 3-column dashboard with 1:1 matching framebuffer & layout viewport
+            logicalH = 760
+            logicalW = (logicalH.toFloat() * aspect).toInt().coerceIn(1024, 1680)
+        }
+        session.resize(logicalW, logicalH)
+        ensureBuffersMatchViewport()
+        applyScaledSafeInsets()
+    }
+
+    private fun ensureBuffersMatchViewport() {
+        val w = session.viewportWidth.coerceAtLeast(1)
+        val h = session.viewportHeight.coerceAtLeast(1)
+        val neededBytes = w * h * 4
+        if (rgbaBytes.size != neededBytes) {
+            rgbaBytes = ByteArray(neededBytes)
+        }
+        if (frameBitmap.width != w || frameBitmap.height != h) {
+            frameBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        }
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (w <= 0 || h <= 0) return
-        val density = resources.displayMetrics.density.coerceAtLeast(1f)
-        val dpW = (w / density).toInt().coerceAtLeast(240)
-        val dpH = (h / density).toInt().coerceAtLeast(240)
-        session.resize(dpW, dpH)
-        applyScaledSafeInsets()
+        updateViewportAndBuffers(w, h)
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         running = true
         lastFrameNanos = System.nanoTime()
+        if (width > 0 && height > 0) {
+            updateViewportAndBuffers(width, height)
+        }
         requestApplyInsets()
         syncSystemBarIconPolarity(darkTheme = (session.currentThemeMode == IguanodonThemeMode.Dark))
         Choreographer.getInstance().postFrameCallback(this)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        if (width <= 0 || height <= 0) return
-        val density = resources.displayMetrics.density.coerceAtLeast(1f)
-        val dpW = (width / density).toInt().coerceAtLeast(240)
-        val dpH = (height / density).toInt().coerceAtLeast(240)
-        session.resize(dpW, dpH)
-        applyScaledSafeInsets()
-        val w = session.viewportWidth
-        val h = session.viewportHeight
-        if (rgbaBytes.size != w * h * 4) {
-            rgbaBytes = ByteArray(w * h * 4)
-            frameBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        }
+        updateViewportAndBuffers(width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -252,6 +270,12 @@ class IguanodonVulkanSurfaceView(
         val dt = (elapsedNanos / 1_000_000_000.0f).coerceIn(1f / 240f, 0.05f)
         lastFrameNanos = frameTimeNanos
 
+        if (width > 0 && height > 0) {
+            updateViewportAndBuffers(width, height)
+        } else {
+            ensureBuffersMatchViewport()
+        }
+
         compositionHost.doFrame(frameTimeNanos)
         session.renderFrame(dt, rgbaBytes)
 
@@ -260,7 +284,7 @@ class IguanodonVulkanSurfaceView(
         if (canvas != null) {
             try {
                 frameBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgbaBytes))
-                val dstRect = Rect(0, 0, width, height)
+                val dstRect = Rect(0, 0, canvas.width, canvas.height)
                 canvas.drawBitmap(frameBitmap, null, dstRect, null)
             } finally {
                 holder.unlockCanvasAndPost(canvas)

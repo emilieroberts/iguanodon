@@ -51,6 +51,20 @@ class IguanodonApplierTest {
             assertEquals(IguanodonRendererBackend.ComposeUi, session.toggleRendererBackend())
             assertEquals(IguanodonRendererBackend.Iguanodon, session.toggleRendererBackend())
 
+            // Simulate pointer click and run 10 consecutive frames to verify no click feedback loop occurs
+            val rgba = ByteArray(session.viewportWidth * session.viewportHeight * 4)
+            session.onPointerDown(160f, 150f, false)
+            session.onPointerUp(160f, 150f)
+            for (frame in 1..10) {
+                host.doFrame(frame * 16_000_000L)
+                session.renderFrame(1f / 120f, rgba)
+            }
+            assertEquals(
+                0,
+                session.pollEvents(),
+                "Subsequent frames after a single tap must not emit echoing click events",
+            )
+
             // Switch to Navigation3ComplexAppSample and run a frame
             host.setContent {
                 Navigation3ComplexAppSample()

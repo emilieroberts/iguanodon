@@ -281,14 +281,14 @@ public final class IguanodonVulkanSurfaceView extends SurfaceView
         int logicalH;
         if (width < height) {
             // Portrait orientation: single-column stack
-            logicalW = 600;
-            logicalH = Math.max(1140, Math.min(1520, (int) (logicalW / aspect)));
+            logicalW = 640;
+            logicalH = Math.max(1200, Math.min(1560, (int) (logicalW / aspect)));
         } else {
             // Landscape orientation: 3-column dashboard
             logicalH = 760;
-            logicalW = Math.max(960, Math.min(1680, (int) (logicalH * aspect)));
+            logicalW = Math.max(1024, Math.min(1680, (int) (logicalH * aspect)));
         }
-        if (logicalW != viewportWidth || logicalH != viewportHeight) {
+        if (logicalW != viewportWidth || logicalH != viewportHeight || frameBitmap.getWidth() != logicalW || frameBitmap.getHeight() != logicalH) {
             viewportWidth = logicalW;
             viewportHeight = logicalH;
             IguanodonNativeBridge.nativeResize(nativeHandle, viewportWidth, viewportHeight);

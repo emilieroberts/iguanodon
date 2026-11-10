@@ -46,11 +46,6 @@ fun StandardBenchmarkApp() {
     var droppedPayloads by remember { mutableStateOf(listOf<String>()) }
     val lazyItems = remember { List(10_000) { "Vulkan SDF Node #$it" } }
 
-    SideEffect {
-        session?.encoder?.encodeSetPowerMode(activePowerMode)
-        session?.encoder?.encodeSetRendererBackend(activeRenderer)
-    }
-
     val mainSections: @Composable () -> Unit = {
         // Section 1: Labels, Buttons (>=48dp), Edit Text Entry, Progress Bars, Image, Animations
         Column {
@@ -146,14 +141,12 @@ fun StandardBenchmarkApp() {
                     nodeId = BenchNodeIds.RENDERER_BACKEND_BTN,
                 ) {
                     activeRenderer = activeRenderer.toggle()
-                    session?.setRendererBackend(activeRenderer)
                 }
                 Button(
                     label = "Pwr: ${activePowerMode.displayName}",
                     nodeId = BenchNodeIds.POWER_MODE_BTN,
                 ) {
                     activePowerMode = activePowerMode.toggle()
-                    session?.setPowerMode(activePowerMode)
                 }
                 Button(
                     label = "Theme: ${activeTheme.displayName}",

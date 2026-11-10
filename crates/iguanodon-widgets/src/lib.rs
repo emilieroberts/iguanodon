@@ -120,6 +120,13 @@ impl RendererBackend {
             Self::ComposeUi => "Compose-UI",
         }
     }
+
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Self::Iguanodon => "Iguanodon",
+            Self::ComposeUi => "ComposeUI",
+        }
+    }
 }
 
 /// Canonical Node IDs for the Standard Benchmark Sample App so both unit tests,
@@ -586,7 +593,7 @@ impl StandardBenchmarkApp {
                     width: Dimension::Fill(1.0),
                     height: Dimension::Fill(1.38),
                     padding: 8.0,
-                    gap: 5.0,
+                    gap: 7.0,
                     ..Default::default()
                 },
             );
@@ -675,7 +682,7 @@ impl StandardBenchmarkApp {
                     width: Dimension::Fill(1.0),
                     height: Dimension::Fill(1.22),
                     padding: 8.0,
-                    gap: 5.0,
+                    gap: 7.0,
                     ..Default::default()
                 },
             );
@@ -1910,19 +1917,28 @@ impl StandardBenchmarkApp {
         let accent = th.colors.accent_glow;
 
         if let Some(r) = self.layout.bounds(HEADLINE_LABEL) {
+            let headline = if r.width < 240.0 {
+                "Iguanodon"
+            } else {
+                self.headline_text.as_str()
+            };
             draw_text_sized_rgba(
                 fb_rgba,
                 fb_w,
                 fb_h,
-                Point::new(r.x + 12.0, r.y + (r.height - 26.0) * 0.5),
-                &self.headline_text,
+                Point::new(r.x + 10.0, r.y + (r.height - 26.0) * 0.5),
+                headline,
                 on_surf,
                 r,
                 true,
             );
         }
         if let Some(r) = self.layout.bounds(RENDERER_BTN) {
-            let label = format!("UI: {}", self.renderer_backend.name());
+            let label = if r.width < 130.0 {
+                self.renderer_backend.short_name().to_string()
+            } else {
+                format!("UI: {}", self.renderer_backend.name())
+            };
             draw_text_rgba(
                 fb_rgba,
                 fb_w,
@@ -1934,7 +1950,11 @@ impl StandardBenchmarkApp {
             );
         }
         if let Some(r) = self.layout.bounds(POWER_BTN) {
-            let label = format!("Pwr: {}", self.power_mode.short_name());
+            let label = if r.width < 110.0 {
+                format!("Pwr:{}", self.power_mode.short_name())
+            } else {
+                format!("Pwr: {}", self.power_mode.short_name())
+            };
             draw_text_rgba(
                 fb_rgba,
                 fb_w,
@@ -1946,42 +1966,54 @@ impl StandardBenchmarkApp {
             );
         }
         if let Some(r) = self.layout.bounds(THEME_BTN) {
-            let label = format!("Theme: {}", self.active_theme_id.short_name());
+            let label = if r.width < 145.0 {
+                self.active_theme_id.short_name().to_string()
+            } else {
+                format!("Theme: {}", self.active_theme_id.short_name())
+            };
             draw_text_rgba(
                 fb_rgba,
                 fb_w,
                 fb_h,
-                Point::new(r.x + 10.0, r.y + (r.height - 21.0) * 0.5),
+                Point::new(r.x + 8.0, r.y + (r.height - 21.0) * 0.5),
                 &label,
                 accent,
                 r,
             );
         }
         if let Some(r) = self.layout.bounds(MODE_BTN) {
-            let label = format!("Mode: {}", self.active_theme_mode.name());
+            let label = if r.width < 110.0 {
+                self.active_theme_mode.name().to_string()
+            } else {
+                format!("Mode: {}", self.active_theme_mode.name())
+            };
             draw_text_rgba(
                 fb_rgba,
                 fb_w,
                 fb_h,
-                Point::new(r.x + 10.0, r.y + (r.height - 21.0) * 0.5),
+                Point::new(r.x + 8.0, r.y + (r.height - 21.0) * 0.5),
                 &label,
                 accent,
                 r,
             );
         }
         if let Some(r) = self.layout.bounds(PERF_OVERLAY) {
-            let perf_str = format!(
-                "FPS:{:.0} 1%:{:.0} Nodes:{}/{}",
-                self.telemetry.avg_fps(),
-                self.telemetry.one_percent_low_fps(),
-                self.telemetry.latest().materialized_nodes,
-                self.lazy_total_items
-            );
+            let perf_str = if r.width < 200.0 {
+                format!("{:.0} FPS", self.telemetry.avg_fps())
+            } else {
+                format!(
+                    "FPS:{:.0} 1%:{:.0} Nodes:{}/{}",
+                    self.telemetry.avg_fps(),
+                    self.telemetry.one_percent_low_fps(),
+                    self.telemetry.latest().materialized_nodes,
+                    self.lazy_total_items
+                )
+            };
             draw_text_rgba(
                 fb_rgba,
                 fb_w,
                 fb_h,
-                Point::new(r.x + 10.0, r.y + (r.height - 21.0) * 0.5),
+                Point::new(r.x + 8.0, r.y + (r.height - 21.0) * 0.5),
                 &perf_str,
                 accent,
                 r,
@@ -2120,22 +2152,24 @@ impl StandardBenchmarkApp {
                 fb_rgba,
                 fb_w,
                 fb_h,
-                Point::new(r.x + 14.0, r.y + 14.0),
+                Point::new(r.x + 14.0, r.y + 12.0),
                 &label,
                 accent,
                 r,
             );
-            if let Some(last) = self.dropped_items.last() {
-                let sub = format!("Last Accepted: {}", last);
-                draw_text_rgba(
-                    fb_rgba,
-                    fb_w,
-                    fb_h,
-                    Point::new(r.x + 14.0, r.y + 44.0),
-                    &sub,
-                    on_surf,
-                    r,
-                );
+            if r.height >= 64.0 {
+                if let Some(last) = self.dropped_items.last() {
+                    let sub = format!("Last Accepted: {}", last);
+                    draw_text_rgba(
+                        fb_rgba,
+                        fb_w,
+                        fb_h,
+                        Point::new(r.x + 14.0, r.y + 38.0),
+                        &sub,
+                        on_surf,
+                        r,
+                    );
+                }
             }
         }
         if let Some(r) = self.layout.bounds(SCROLLABLE_TEXT) {
@@ -3171,36 +3205,50 @@ impl IguanodonTestHarness {
         self.active_scroll_drag = None;
         self.active_slider_drag = false;
 
-        // Dispatch reverse events for retained ApplierSceneGraph nodes
+        // Dispatch reverse events for custom retained ApplierSceneGraph nodes (IDs >= 100).
+        // Canonical benchmark nodes (IDs < 100) are hit-tested against `self.app.layout` below
+        // using their exact visual bounds so equal-slice Applier containers never intercept taps.
         if is_right_button {
-            if let Some(hit_id) = self.applier_scene.hit_test_masked(pt, event_mask::LONG_CLICK | event_mask::CLICK) {
-                self.push_reverse_event(ReverseUiEvent {
-                    event_type: ReverseEventType::LongOrSecondaryClick,
-                    flags: 1,
-                    aux_u32: 0,
-                    node_id: hit_id,
-                    f0: pt.x,
-                    f1: pt.y,
-                    f2: 0.0,
-                    f3: 0.0,
-                });
+            if let Some(hit_id) = self
+                .applier_scene
+                .hit_test_masked(pt, event_mask::LONG_CLICK | event_mask::CLICK)
+            {
+                if hit_id >= 100 {
+                    self.push_reverse_event(ReverseUiEvent {
+                        event_type: ReverseEventType::LongOrSecondaryClick,
+                        flags: 1,
+                        aux_u32: 0,
+                        node_id: hit_id,
+                        f0: pt.x,
+                        f1: pt.y,
+                        f2: 0.0,
+                        f3: 0.0,
+                    });
+                }
             }
         } else {
             if let Some(drag_id) = self.applier_scene.hit_test_masked(pt, event_mask::DRAG) {
-                self.applier_scene.active_drag_node_id = Some((drag_id, pt));
+                if drag_id >= 100 {
+                    self.applier_scene.active_drag_node_id = Some((drag_id, pt));
+                }
             }
-            if let Some(click_id) = self.applier_scene.hit_test_masked(pt, event_mask::CLICK | event_mask::TEXT_INPUT) {
-                self.applier_scene.focused_node_id = Some(click_id);
-                self.push_reverse_event(ReverseUiEvent {
-                    event_type: ReverseEventType::Click,
-                    flags: 0,
-                    aux_u32: 0,
-                    node_id: click_id,
-                    f0: pt.x,
-                    f1: pt.y,
-                    f2: 0.0,
-                    f3: 0.0,
-                });
+            if let Some(click_id) = self
+                .applier_scene
+                .hit_test_masked(pt, event_mask::CLICK | event_mask::TEXT_INPUT)
+            {
+                if click_id >= 100 {
+                    self.applier_scene.focused_node_id = Some(click_id);
+                    self.push_reverse_event(ReverseUiEvent {
+                        event_type: ReverseEventType::Click,
+                        flags: 0,
+                        aux_u32: 0,
+                        node_id: click_id,
+                        f0: pt.x,
+                        f1: pt.y,
+                        f2: 0.0,
+                        f3: 0.0,
+                    });
+                }
             }
         }
 

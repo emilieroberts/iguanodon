@@ -1233,11 +1233,18 @@ fun MaterialExpressiveTheme(
 ) {
     val session = LocalIguanodonSession.current
     val mode = if (darkTheme) IguanodonThemeMode.Dark else IguanodonThemeMode.Light
+    var lastSyncedTheme by remember { mutableStateOf<IguanodonThemeId?>(null) }
+    var lastSyncedMode by remember { mutableStateOf<IguanodonThemeMode?>(null) }
     SideEffect {
-        session?.encoder?.encodeSetTheme(themeId)
-        session?.encoder?.encodeSetThemeMode(mode)
-        session?.notifyThemeModeChanged(mode)
-        session?.tickEngine()
+        if (lastSyncedTheme != themeId) {
+            lastSyncedTheme = themeId
+            session?.encoder?.encodeSetTheme(themeId)
+        }
+        if (lastSyncedMode != mode) {
+            lastSyncedMode = mode
+            session?.encoder?.encodeSetThemeMode(mode)
+            session?.notifyThemeModeChanged(mode)
+        }
     }
     val scheme = resolveIguanodonColorScheme(themeId = themeId, darkTheme = darkTheme)
     val baseDensity = LocalDensity.current
@@ -1431,16 +1438,16 @@ fun PerfOverlay(modifier: Modifier = Modifier) {
 @Composable
 fun Label(
     text: String,
-    nodeId: Int = BenchNodeIds.HEADER_LABEL,
+    nodeId: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val session = LocalIguanodonSession.current
     val color = MaterialTheme.colorScheme.onSurface
-    SideEffect {
-        session?.encoder?.encodeSetLabelText(nodeId, text)
+    val resolvedId = remember(nodeId) {
+        if (nodeId != 0) nodeId.toLong() else (session?.allocateNodeId() ?: BenchNodeIds.HEADER_LABEL.toLong())
     }
     ComposeNode<IguanodonNode, IguanodonApplier>(
-        factory = { IguanodonNode(nodeId = nodeId.toLong(), nodeKind = NodeKinds.TEXT) },
+        factory = { IguanodonNode(nodeId = resolvedId, nodeKind = NodeKinds.TEXT) },
         update = {
             set(modifier) { mod ->
                 session?.syncModifierToNode(this, mod)
@@ -1469,14 +1476,10 @@ fun Button(
 ) {
     val session = LocalIguanodonSession.current
     val scheme = MaterialTheme.colorScheme
-    SideEffect {
-        session?.encoder?.encodeSetLabelText(nodeId, label)
-    }
     val btnMod = modifier
         .heightIn(min = MIN_TOUCH_TARGET_DP.dp)
         .background(scheme.primary, RoundedCornerShape(12.dp))
         .clickable {
-            session?.encoder?.encodeClickNode(nodeId)
             onClick()
         }
     ComposeNode<IguanodonNode, IguanodonApplier>(
@@ -1548,11 +1551,6 @@ fun ProgressBar(
 ) {
     val session = LocalIguanodonSession.current
     val nodeId = remember { session?.allocateNodeId() ?: BenchNodeIds.DETERMINATE_PROGRESS.toLong() }
-    SideEffect {
-        if (progress != null) {
-            session?.encoder?.encodeSetProgress(progress.coerceIn(0f, 1f))
-        }
-    }
     ComposeNode<IguanodonNode, IguanodonApplier>(
         factory = { IguanodonNode(nodeId = nodeId, nodeKind = NodeKinds.PROGRESS) },
         update = {
@@ -1598,9 +1596,6 @@ fun TextField(
 ) {
     val session = LocalIguanodonSession.current
     val nodeId = remember { session?.allocateNodeId() ?: BenchNodeIds.TEXT_FIELD_INPUT.toLong() }
-    SideEffect {
-        session?.encoder?.encodeSetTextFieldValue(value)
-    }
     ComposeNode<IguanodonNode, IguanodonApplier>(
         factory = { IguanodonNode(nodeId = nodeId, nodeKind = NodeKinds.TEXT_FIELD) },
         update = {

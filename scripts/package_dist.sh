@@ -36,12 +36,42 @@ cargo build --release -p iguanodon-ffi
 cp "${ROOT_DIR}/target/release/libiguanodon_ffi.so" "${DIST_DIR}/native/linux-x86_64/libiguanodon_ffi.so"
 cp "${ROOT_DIR}/target/release/libiguanodon_ffi.a" "${DIST_DIR}/native/linux-x86_64/libiguanodon_ffi.a"
 
-# 2. Copy Android arm64-v8a release library if built
+# 2. Cross-compile & copy Android arm64-v8a (and x86_64) release libraries if NDK is available
+NDK_DIR=""
+for sdk_cand in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "${HOME}/Android/Sdk" "/opt/android-sdk"; do
+    if [[ -n "${sdk_cand}" && -d "${sdk_cand}/ndk" ]]; then
+        NDK_DIR="$(find "${sdk_cand}/ndk" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n1)"
+        break
+    fi
+done
+if [[ -n "${NDK_DIR}" && -d "${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin" ]]; then
+    TOOLCHAIN_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+    echo "[*] Cross-compiling Android arm64-v8a & x86_64 libiguanodon_ffi.so with NDK (${NDK_DIR})..."
+    rustup target add aarch64-linux-android x86_64-linux-android >/dev/null 2>&1 || true
+    CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${TOOLCHAIN_BIN}/aarch64-linux-android26-clang" \
+    CC_aarch64_linux_android="${TOOLCHAIN_BIN}/aarch64-linux-android26-clang" \
+    AR_aarch64_linux_android="${TOOLCHAIN_BIN}/llvm-ar" \
+    RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384" \
+    cargo build --release --target aarch64-linux-android -p iguanodon-ffi
+
+    CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="${TOOLCHAIN_BIN}/x86_64-linux-android26-clang" \
+    CC_x86_64_linux_android="${TOOLCHAIN_BIN}/x86_64-linux-android26-clang" \
+    AR_x86_64_linux_android="${TOOLCHAIN_BIN}/llvm-ar" \
+    RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384" \
+    cargo build --release --target x86_64-linux-android -p iguanodon-ffi || true
+fi
+
 ANDROID_SO="${ROOT_DIR}/target/aarch64-linux-android/release/libiguanodon_ffi.so"
 if [[ -f "${ANDROID_SO}" ]]; then
     cp "${ANDROID_SO}" "${DIST_DIR}/native/android-arm64-v8a/libiguanodon_ffi.so"
     cp "${ANDROID_SO}" "${ROOT_DIR}/kotlin/android-benchmark-app/src/main/jniLibs/arm64-v8a/libiguanodon_ffi.so" 2>/dev/null || true
     echo "[+] Included Android arm64-v8a libiguanodon_ffi.so"
+fi
+ANDROID_X64_SO="${ROOT_DIR}/target/x86_64-linux-android/release/libiguanodon_ffi.so"
+if [[ -f "${ANDROID_X64_SO}" ]]; then
+    mkdir -p "${DIST_DIR}/native/android-x86_64"
+    cp "${ANDROID_X64_SO}" "${DIST_DIR}/native/android-x86_64/libiguanodon_ffi.so"
+    echo "[+] Included Android x86_64 libiguanodon_ffi.so"
 fi
 
 # 3. Generate C/C++/Qt/GTK Header (`dist/include/iguanodon.h`)
@@ -247,6 +277,11 @@ fi
 if [[ -f "${DIST_DIR}/native/android-arm64-v8a/libiguanodon_ffi.so" ]]; then
     cp "${DIST_DIR}/native/android-arm64-v8a/libiguanodon_ffi.so" \
        "${WORK_AAR}/aar_root/jni/arm64-v8a/libiguanodon_ffi.so"
+fi
+if [[ -f "${DIST_DIR}/native/android-x86_64/libiguanodon_ffi.so" ]]; then
+    mkdir -p "${WORK_AAR}/aar_root/jni/x86_64"
+    cp "${DIST_DIR}/native/android-x86_64/libiguanodon_ffi.so" \
+       "${WORK_AAR}/aar_root/jni/x86_64/libiguanodon_ffi.so"
 fi
 
 python3 -c "
