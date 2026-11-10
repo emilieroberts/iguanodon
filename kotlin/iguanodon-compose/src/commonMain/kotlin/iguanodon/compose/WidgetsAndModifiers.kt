@@ -799,6 +799,7 @@ enum class IguanodonShaderMaterialId(val id: Int, val displayName: String) {
     ReflectiveGlass(9, "Reflective Glass"),
     ColorCyclingGlowbar(10, "Color-Cycling Glowbar"),
     FlowingGentleGradient(11, "Flowing Yellow-White"),
+    ElectricJellyfish(12, "Electric Jellyfish"),
 }
 
 fun Modifier.frostedGlass(
@@ -905,6 +906,38 @@ fun Modifier.flowingGradient(
     shaderId = IguanodonShaderMaterialId.FlowingGentleGradient.id.toByte(),
     shaderP0 = speedCyclesPerSec,
 )
+
+/**
+ * Applies the **Electric Jellyfish Backdrop** shader (`ShaderMaterialId::ElectricJellyfish = 12`):
+ * a deep abyssal ocean blue gradient with 5 slowly drifting, gently pulsing bioluminescent
+ * jellyfish-like light blooms (without legs) viewed through a diffuse opaque pane of frosted glass.
+ */
+fun Modifier.electricJellyfishBackdrop(
+    darkTheme: Boolean = true,
+): Modifier = copyWith(
+    shaderId = IguanodonShaderMaterialId.ElectricJellyfish.id.toByte(),
+    shaderP0 = if (darkTheme) 1.0f else 0.0f,
+)
+
+/**
+ * Full-screen animated backdrop composable that renders gently pulsing, slowly drifting
+ * bioluminescent electric jellyfish light blooms (no legs) viewed through a diffuse opaque
+ * pane of frosted glass.
+ */
+@Composable
+fun ElectricJellyfishBackdrop(
+    darkTheme: Boolean = LocalIguanodonThemeMode.current == IguanodonThemeMode.Dark,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    if (modifier === Modifier) {
+        content()
+    } else {
+        Box(modifier = modifier.fillMaxSize().electricJellyfishBackdrop(darkTheme = darkTheme)) {
+            content()
+        }
+    }
+}
 
 fun Modifier.jelloClickWobble(
     dampingRatio: Float = 0.22f,

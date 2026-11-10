@@ -129,50 +129,52 @@ fun StandardBenchmarkApp() {
     }
 
     IguanodonTheme(themeId = activeTheme, mode = activeMode) {
-        Column {
-            // Top Header Bar with Renderer Toggle (Iguanodon vs Compose-UI), Power Mode Toggle (120FPS vs 30FPS), Theme Switcher, Light/Dark Mode Switcher & Performance Telemetry Indicator
-            Row(modifier = Modifier.frostedGlass(blurRadius = 18f)) {
-                Label(
-                    text = "Iguanodon Studio — Standard Benchmark App",
-                    nodeId = BenchNodeIds.HEADER_LABEL,
-                )
-                Button(
-                    label = "UI: ${activeRenderer.displayName}",
-                    nodeId = BenchNodeIds.RENDERER_BACKEND_BTN,
-                ) {
-                    activeRenderer = activeRenderer.toggle()
+        ElectricJellyfishBackdrop(darkTheme = activeMode == IguanodonThemeMode.Dark) {
+            Column {
+                // Top Header Bar with Renderer Toggle (Iguanodon vs Compose-UI), Power Mode Toggle (120FPS vs 30FPS), Theme Switcher, Light/Dark Mode Switcher & Performance Telemetry Indicator
+                Row(modifier = Modifier.frostedGlass(blurRadius = 18f)) {
+                    Label(
+                        text = "Iguanodon Studio — Standard Benchmark App",
+                        nodeId = BenchNodeIds.HEADER_LABEL,
+                    )
+                    Button(
+                        label = "UI: ${activeRenderer.displayName}",
+                        nodeId = BenchNodeIds.RENDERER_BACKEND_BTN,
+                    ) {
+                        activeRenderer = activeRenderer.toggle()
+                    }
+                    Button(
+                        label = "Pwr: ${activePowerMode.displayName}",
+                        nodeId = BenchNodeIds.POWER_MODE_BTN,
+                    ) {
+                        activePowerMode = activePowerMode.toggle()
+                    }
+                    Button(
+                        label = "Theme: ${activeTheme.displayName}",
+                        nodeId = BenchNodeIds.THEME_SWITCHER_BTN,
+                    ) {
+                        val all = IguanodonThemeId.entries
+                        activeTheme = all[(activeTheme.ordinal + 1) % all.size]
+                    }
+                    Button(
+                        label = "Mode: ${activeMode.displayName}",
+                        nodeId = BenchNodeIds.MODE_SWITCHER_BTN,
+                    ) {
+                        activeMode = activeMode.toggle()
+                    }
+                    PerfOverlay()
                 }
-                Button(
-                    label = "Pwr: ${activePowerMode.displayName}",
-                    nodeId = BenchNodeIds.POWER_MODE_BTN,
-                ) {
-                    activePowerMode = activePowerMode.toggle()
-                }
-                Button(
-                    label = "Theme: ${activeTheme.displayName}",
-                    nodeId = BenchNodeIds.THEME_SWITCHER_BTN,
-                ) {
-                    val all = IguanodonThemeId.entries
-                    activeTheme = all[(activeTheme.ordinal + 1) % all.size]
-                }
-                Button(
-                    label = "Mode: ${activeMode.displayName}",
-                    nodeId = BenchNodeIds.MODE_SWITCHER_BTN,
-                ) {
-                    activeMode = activeMode.toggle()
-                }
-                PerfOverlay()
-            }
 
-            if (isPortrait) {
-                // Portrait Orientation: Single Vertical Column
-                Column {
-                    mainSections()
-                }
-            } else {
-                // Landscape Orientation: 3 Side-by-Side Columns
-                Row {
-                    mainSections()
+                if (isPortrait) {
+                    // Portrait Orientation: Single Vertical Column
+                    Column {
+                        mainSections()
+                    }
+                } else {
+                    // Landscape Orientation: 3 Side-by-Side Columns
+                    Row {
+                        mainSections()
+                    }
                 }
             }
         }

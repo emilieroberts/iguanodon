@@ -39,12 +39,14 @@ pub enum ShaderMaterialId {
     ReflectiveGlass = 9,
     ColorCyclingGlowbar = 10,
     FlowingGentleGradient = 11,
+    ElectricJellyfish = 12,
 }
 
 impl ShaderMaterialId {
     /// Interactive shader presets that can be cycled in the Standard Benchmark Sample App.
-    pub const SHOWCASE_PRESETS: [Self; 8] = [
+    pub const SHOWCASE_PRESETS: [Self; 9] = [
         Self::ProceduralFire,
+        Self::ElectricJellyfish,
         Self::GentleSmoke,
         Self::GentlePulsingLights,
         Self::ReflectiveGlass,
@@ -68,6 +70,7 @@ impl ShaderMaterialId {
             9 => Self::ReflectiveGlass,
             10 => Self::ColorCyclingGlowbar,
             11 => Self::FlowingGentleGradient,
+            12 => Self::ElectricJellyfish,
             _ => Self::StandardSdf,
         }
     }
@@ -86,6 +89,7 @@ impl ShaderMaterialId {
             Self::ReflectiveGlass => "Reflective Glass",
             Self::ColorCyclingGlowbar => "Color Glowbar",
             Self::FlowingGentleGradient => "Flowing Gradient",
+            Self::ElectricJellyfish => "Electric Jellyfish",
         }
     }
 }
@@ -383,6 +387,10 @@ pub fn color_cycling_glowbar_spirv() -> Vec<u32> {
 
 pub fn flowing_gradient_spirv() -> Vec<u32> {
     build_vulkan_compute_spirv(0x47524144) // "GRAD"
+}
+
+pub fn electric_jellyfish_spirv() -> Vec<u32> {
+    build_vulkan_compute_spirv(0x4A454C59) // "JELY"
 }
 
 /// Smooth 3-term cosine spectrum color ramp for the Color-Cycling Glowbar (`hue in [0.0, 1.0]`).
@@ -941,6 +949,461 @@ impl WaterDropWallpaper {
     }
 }
 
+/// Standard Animated Background Shader: **Electric Jellyfish Backdrop**
+/// (`EmMessageBridgeIguanodon` deep abyssal blue ocean gradient + 5 slowly drifting,
+/// gently pulsing bioluminescent jellyfish light blooms without legs + diffuse opaque frosted glass pane veil).
+#[derive(Clone)]
+pub struct ElectricJellyfishField {
+    pub grid_w: usize,
+    pub grid_h: usize,
+    /// Pre-evaluated fixed-point RGB (`0..=65280`, i.e. `u8 * 256`) at each 16x16 grid vertex.
+    pub grid_rgb256: Vec<[u32; 3]>,
+}
+
+#[inline]
+fn sample_4stop_linear(t: f32, c0: [f32; 3], c1: [f32; 3], c2: [f32; 3], c3: [f32; 3]) -> [f32; 3] {
+    let tc = t.clamp(0.0, 1.0) * 3.0;
+    if tc < 1.0 {
+        let u = tc;
+        [
+            c0[0] + (c1[0] - c0[0]) * u,
+            c0[1] + (c1[1] - c0[1]) * u,
+            c0[2] + (c1[2] - c0[2]) * u,
+        ]
+    } else if tc < 2.0 {
+        let u = tc - 1.0;
+        [
+            c1[0] + (c2[0] - c1[0]) * u,
+            c1[1] + (c2[1] - c1[1]) * u,
+            c1[2] + (c2[2] - c1[2]) * u,
+        ]
+    } else {
+        let u = tc - 2.0;
+        [
+            c2[0] + (c3[0] - c2[0]) * u,
+            c2[1] + (c3[1] - c2[1]) * u,
+            c2[2] + (c3[2] - c2[2]) * u,
+        ]
+    }
+}
+
+#[inline]
+fn blend_4stop_radial(
+    dst: &mut [f32; 3],
+    t: f32,
+    c0: [f32; 3],
+    a0: f32,
+    c1: [f32; 3],
+    a1: f32,
+    c2: [f32; 3],
+    a2: f32,
+) {
+    let tc = t.clamp(0.0, 1.0) * 3.0;
+    let (sr, sg, sb, sa) = if tc < 1.0 {
+        let u = tc;
+        (
+            c0[0] + (c1[0] - c0[0]) * u,
+            c0[1] + (c1[1] - c0[1]) * u,
+            c0[2] + (c1[2] - c0[2]) * u,
+            a0 + (a1 - a0) * u,
+        )
+    } else if tc < 2.0 {
+        let u = tc - 1.0;
+        (
+            c1[0] + (c2[0] - c1[0]) * u,
+            c1[1] + (c2[1] - c1[1]) * u,
+            c1[2] + (c2[2] - c1[2]) * u,
+            a1 + (a2 - a1) * u,
+        )
+    } else {
+        let u = 1.0 - (tc - 2.0);
+        (c2[0], c2[1], c2[2], a2 * u)
+    };
+    let inv = 1.0 - sa;
+    dst[0] = dst[0] * inv + sr * sa;
+    dst[1] = dst[1] * inv + sg * sa;
+    dst[2] = dst[2] * inv + sb * sa;
+}
+
+/// Evaluates the **Electric Jellyfish Backdrop** color at normalized coordinates `(uv_x, uv_y)`
+/// in a surface of `(width, height)` at time `t_sec`.
+#[inline]
+pub fn evaluate_electric_jellyfish_backdrop(
+    uv_x: f32,
+    uv_y: f32,
+    width: f32,
+    height: f32,
+    t_sec: f32,
+    dark_theme: bool,
+) -> Color {
+    let w = width.max(1.0);
+    let h = height.max(1.0);
+    let min_dim = w.min(h).max(1.0);
+    let px = uv_x * w;
+    let py = uv_y * h;
+
+    // 1. Deep abyssal bioluminescent ocean base gradient (Dark) or rich marine-sky blue gradient (Light)
+    let diag_t = ((uv_x + uv_y) * 0.5).clamp(0.0, 1.0);
+    let mut rgb = if dark_theme {
+        sample_4stop_linear(
+            diag_t,
+            [0x04 as f32 / 255.0, 0x0A as f32 / 255.0, 0x18 as f32 / 255.0],
+            [0x07 as f32 / 255.0, 0x14 as f32 / 255.0, 0x2B as f32 / 255.0],
+            [0x0A as f32 / 255.0, 0x1D as f32 / 255.0, 0x3B as f32 / 255.0],
+            [0x05 as f32 / 255.0, 0x0E as f32 / 255.0, 0x20 as f32 / 255.0],
+        )
+    } else {
+        sample_4stop_linear(
+            diag_t,
+            [0x56 as f32 / 255.0, 0xA0 as f32 / 255.0, 0xEB as f32 / 255.0],
+            [0x42 as f32 / 255.0, 0x8C as f32 / 255.0, 0xE0 as f32 / 255.0],
+            [0x4E as f32 / 255.0, 0x98 as f32 / 255.0, 0xE8 as f32 / 255.0],
+            [0x68 as f32 / 255.0, 0xB1 as f32 / 255.0, 0xF6 as f32 / 255.0],
+        )
+    };
+
+    // 2. Five slowly drifting, gently pulsing bioluminescent jellyfish light blooms behind blurry glass (no tendrils/legs)
+    struct JellyBloom {
+        base_x: f32,
+        base_y: f32,
+        orbit_x: f32,
+        orbit_y: f32,
+        speed_mul: f32,
+        phase_offset: f32,
+        radius_factor: f32,
+        core: [f32; 3],
+        mid: [f32; 3],
+        rim: [f32; 3],
+    }
+
+    let blooms: [JellyBloom; 5] = if dark_theme {
+        [
+            JellyBloom {
+                base_x: 0.22,
+                base_y: 0.28,
+                orbit_x: 0.09,
+                orbit_y: 0.08,
+                speed_mul: 1.0,
+                phase_offset: 0.0,
+                radius_factor: 0.48,
+                core: [0.00, 0.96, 1.00], // 0xFF00F5FF
+                mid: [0.00, 0.57, 0.92],  // 0xFF0091EA
+                rim: [0.19, 0.31, 1.00],  // 0xFF304FFE
+            },
+            JellyBloom {
+                base_x: 0.76,
+                base_y: 0.24,
+                orbit_x: 0.08,
+                orbit_y: 0.10,
+                speed_mul: -0.8,
+                phase_offset: 1.4,
+                radius_factor: 0.44,
+                core: [0.49, 0.30, 1.00], // 0xFF7C4DFF
+                mid: [0.00, 0.69, 1.00],  // 0xFF00B0FF
+                rim: [0.00, 0.90, 1.00],  // 0xFF00E5FF
+            },
+            JellyBloom {
+                base_x: 0.52,
+                base_y: 0.62,
+                orbit_x: 0.10,
+                orbit_y: 0.09,
+                speed_mul: 0.9,
+                phase_offset: 2.7,
+                radius_factor: 0.54,
+                core: [0.09, 1.00, 1.00], // 0xFF18FFFF
+                mid: [0.16, 0.38, 1.00],  // 0xFF2962FF
+                rim: [0.67, 0.00, 1.00],  // 0xFFAA00FF
+            },
+            JellyBloom {
+                base_x: 0.18,
+                base_y: 0.78,
+                orbit_x: 0.08,
+                orbit_y: 0.07,
+                speed_mul: 1.1,
+                phase_offset: 4.1,
+                radius_factor: 0.40,
+                core: [0.39, 1.00, 0.85], // 0xFF64FFDA
+                mid: [0.00, 0.72, 0.83],  // 0xFF00B8D4
+                rim: [0.24, 0.35, 1.00],  // 0xFF3D5AFE
+            },
+            JellyBloom {
+                base_x: 0.84,
+                base_y: 0.74,
+                orbit_x: 0.09,
+                orbit_y: 0.08,
+                speed_mul: -1.0,
+                phase_offset: 5.2,
+                radius_factor: 0.46,
+                core: [0.88, 0.25, 0.98], // 0xFFE040FB
+                mid: [0.33, 0.43, 1.00],  // 0xFF536DFE
+                rim: [0.00, 0.90, 1.00],  // 0xFF00E5FF
+            },
+        ]
+    } else {
+        [
+            JellyBloom {
+                base_x: 0.22,
+                base_y: 0.28,
+                orbit_x: 0.09,
+                orbit_y: 0.08,
+                speed_mul: 1.0,
+                phase_offset: 0.0,
+                radius_factor: 0.48,
+                core: [1.00, 1.00, 1.00],
+                mid: [0.50, 0.97, 1.00],
+                rim: [0.09, 1.00, 1.00],
+            },
+            JellyBloom {
+                base_x: 0.76,
+                base_y: 0.24,
+                orbit_x: 0.08,
+                orbit_y: 0.10,
+                speed_mul: -0.8,
+                phase_offset: 1.4,
+                radius_factor: 0.44,
+                core: [0.91, 0.87, 1.00],
+                mid: [0.51, 0.69, 1.00],
+                rim: [0.00, 0.90, 1.00],
+            },
+            JellyBloom {
+                base_x: 0.52,
+                base_y: 0.62,
+                orbit_x: 0.10,
+                orbit_y: 0.09,
+                speed_mul: 0.9,
+                phase_offset: 2.7,
+                radius_factor: 0.54,
+                core: [1.00, 1.00, 1.00],
+                mid: [0.39, 1.00, 0.85],
+                rim: [0.33, 0.43, 1.00],
+            },
+            JellyBloom {
+                base_x: 0.18,
+                base_y: 0.78,
+                orbit_x: 0.08,
+                orbit_y: 0.07,
+                speed_mul: 1.1,
+                phase_offset: 4.1,
+                radius_factor: 0.40,
+                core: [0.88, 1.00, 0.98],
+                mid: [0.39, 1.00, 0.85],
+                rim: [0.00, 0.69, 1.00],
+            },
+            JellyBloom {
+                base_x: 0.84,
+                base_y: 0.74,
+                orbit_x: 0.09,
+                orbit_y: 0.08,
+                speed_mul: -1.0,
+                phase_offset: 5.2,
+                radius_factor: 0.46,
+                core: [0.97, 0.73, 0.82],
+                mid: [0.50, 0.85, 1.00],
+                rim: [0.09, 1.00, 1.00],
+            },
+        ]
+    };
+
+    let drift_phase = t_sec * (std::f32::consts::TAU / 22.0);
+    let pulse_phase = t_sec * (std::f32::consts::TAU / 6.0);
+
+    let outer_alpha = if dark_theme { 0.34 } else { 0.48 };
+    let mid_alpha = if dark_theme { 0.22 } else { 0.32 };
+    let rim_alpha = if dark_theme { 0.10 } else { 0.16 };
+    let core_white_alpha = if dark_theme { 0.22 } else { 0.42 };
+    let core_tint_alpha = if dark_theme { 0.38 } else { 0.46 };
+
+    for b in &blooms {
+        let angle = drift_phase * b.speed_mul + b.phase_offset;
+        let pulse = 0.80 + 0.20 * (pulse_phase + b.phase_offset).sin();
+        let cx = w * (b.base_x + b.orbit_x * angle.cos());
+        let cy = h * (b.base_y + b.orbit_y * (angle * 1.3).sin());
+        let radius = (min_dim * b.radius_factor * pulse).max(80.0);
+        let dx = px - cx;
+        let dy = py - cy;
+        let d_sq = dx * dx + dy * dy;
+        if d_sq < radius * radius {
+            let d = d_sq.sqrt();
+            let t_outer = d / radius;
+            blend_4stop_radial(
+                &mut rgb,
+                t_outer,
+                b.core,
+                outer_alpha * pulse,
+                b.mid,
+                mid_alpha * pulse,
+                b.rim,
+                rim_alpha,
+            );
+            let inner_radius = radius * 0.40;
+            if d < inner_radius {
+                let t_inner = d / inner_radius;
+                blend_4stop_radial(
+                    &mut rgb,
+                    t_inner,
+                    [1.0, 1.0, 1.0],
+                    core_white_alpha * pulse,
+                    b.core,
+                    core_tint_alpha * pulse,
+                    b.rim,
+                    rim_alpha,
+                );
+            }
+        }
+    }
+
+    // 3. Soft diffuse frosted glass pane veil across the viewport
+    let (veil_col, veil_a) = if dark_theme {
+        if uv_y < 0.5 {
+            let u = uv_y * 2.0;
+            (
+                [
+                    (0x07 as f32 + (0x09 as f32 - 0x07 as f32) * u) / 255.0,
+                    (0x13 as f32 + (0x19 as f32 - 0x13 as f32) * u) / 255.0,
+                    (0x26 as f32 + (0x33 as f32 - 0x26 as f32) * u) / 255.0,
+                ],
+                0.48 + (0.40 - 0.48) * u,
+            )
+        } else {
+            let u = (uv_y - 0.5) * 2.0;
+            (
+                [
+                    (0x09 as f32 + (0x06 as f32 - 0x09 as f32) * u) / 255.0,
+                    (0x19 as f32 + (0x10 as f32 - 0x19 as f32) * u) / 255.0,
+                    (0x33 as f32 + (0x22 as f32 - 0x33 as f32) * u) / 255.0,
+                ],
+                0.40 + (0.50 - 0.40) * u,
+            )
+        }
+    } else if uv_y < 0.5 {
+        let u = uv_y * 2.0;
+        (
+            [
+                (0xD6 as f32 + (0xC4 as f32 - 0xD6 as f32) * u) / 255.0,
+                (0xEC as f32 + (0xE4 as f32 - 0xEC as f32) * u) / 255.0,
+                1.0,
+            ],
+            0.18 + (0.14 - 0.18) * u,
+        )
+    } else {
+        let u = (uv_y - 0.5) * 2.0;
+        (
+            [
+                (0xC4 as f32 + (0xD6 as f32 - 0xC4 as f32) * u) / 255.0,
+                (0xE4 as f32 + (0xEC as f32 - 0xE4 as f32) * u) / 255.0,
+                1.0,
+            ],
+            0.14 + (0.20 - 0.14) * u,
+        )
+    };
+
+    let inv_v = 1.0 - veil_a;
+    rgb[0] = (rgb[0] * inv_v + veil_col[0] * veil_a).clamp(0.0, 1.0);
+    rgb[1] = (rgb[1] * inv_v + veil_col[1] * veil_a).clamp(0.0, 1.0);
+    rgb[2] = (rgb[2] * inv_v + veil_col[2] * veil_a).clamp(0.0, 1.0);
+
+    Color::rgba(rgb[0], rgb[1], rgb[2], 1.0)
+}
+
+impl ElectricJellyfishField {
+    /// Step size in pixels between grid samples (`16` pixels = `1 << 4`).
+    pub const STEP: usize = 16;
+
+    /// Precomputes the coarse `16x16` grid of the Electric Jellyfish Backdrop for `(width, height)`.
+    /// Takes ~35 microseconds per frame and reconstructs the smooth radial blooms via bilinear scanline interpolation.
+    pub fn compute(width: u32, height: u32, t_sec: f32, clear_color: Option<Color>) -> Self {
+        let w = width.max(1) as f32;
+        let h = height.max(1) as f32;
+        let dark_theme = clear_color
+            .map(|c| (c.r + c.g + c.b) < 1.5)
+            .unwrap_or(true);
+        let grid_w = (width as usize).div_ceil(Self::STEP) + 1;
+        let grid_h = (height as usize).div_ceil(Self::STEP) + 1;
+        let mut grid_rgb256 = Vec::with_capacity(grid_w * grid_h);
+
+        for gy in 0..grid_h {
+            let py = ((gy * Self::STEP) as f32).min(h);
+            let uv_y = (py / h).clamp(0.0, 1.0);
+            for gx in 0..grid_w {
+                let px = ((gx * Self::STEP) as f32).min(w);
+                let uv_x = (px / w).clamp(0.0, 1.0);
+                let c = evaluate_electric_jellyfish_backdrop(uv_x, uv_y, w, h, t_sec, dark_theme);
+                grid_rgb256.push([
+                    (c.r * 65280.0).round() as u32,
+                    (c.g * 65280.0).round() as u32,
+                    (c.b * 65280.0).round() as u32,
+                ]);
+            }
+        }
+
+        Self {
+            grid_w,
+            grid_h,
+            grid_rgb256,
+        }
+    }
+
+    /// Renders a single scanline `y` (`0..height`) into `row_rgba` (`width * 4` bytes) with bilinear
+    /// interpolation across the `16x16` grid plus subtle frosted-glass optical micro-diffusion.
+    #[inline]
+    pub fn fill_scanline_rgba(&self, y: u32, width: u32, row_rgba: &mut [u8]) {
+        let gy0 = ((y as usize) >> 4).min(self.grid_h.saturating_sub(2));
+        let gy1 = (gy0 + 1).min(self.grid_h - 1);
+        let wy = (y & 15) as u32;
+        let inv_wy = 16 - wy;
+
+        let row0 = &self.grid_rgb256[(gy0 * self.grid_w)..((gy0 + 1) * self.grid_w)];
+        let row1 = &self.grid_rgb256[(gy1 * self.grid_w)..((gy1 + 1) * self.grid_w)];
+
+        let w_usize = width as usize;
+        let mut x = 0_usize;
+        let mut gx = 0_usize;
+
+        let mut c_left = [
+            (row0[0][0] * inv_wy + row1[0][0] * wy) >> 4,
+            (row0[0][1] * inv_wy + row1[0][1] * wy) >> 4,
+            (row0[0][2] * inv_wy + row1[0][2] * wy) >> 4,
+        ];
+
+        while x < w_usize {
+            let next_gx = (gx + 1).min(self.grid_w - 1);
+            let c_right = [
+                (row0[next_gx][0] * inv_wy + row1[next_gx][0] * wy) >> 4,
+                (row0[next_gx][1] * inv_wy + row1[next_gx][1] * wy) >> 4,
+                (row0[next_gx][2] * inv_wy + row1[next_gx][2] * wy) >> 4,
+            ];
+            let span_end = (x + 16).min(w_usize);
+            let dr = (c_right[0] as i32 - c_left[0] as i32) >> 4;
+            let dg = (c_right[1] as i32 - c_left[1] as i32) >> 4;
+            let db = (c_right[2] as i32 - c_left[2] as i32) >> 4;
+            let mut r = c_left[0] as i32;
+            let mut g = c_left[1] as i32;
+            let mut b = c_left[2] as i32;
+
+            for px in x..span_end {
+                // Subtle frosted-glass optical diffusion grain (±2 out of 255)
+                let h_noise = (((px as u32).wrapping_mul(73856093)
+                    ^ y.wrapping_mul(19349663))
+                    >> 16)
+                    & 7;
+                let grain = (h_noise as i32 - 3) * 64;
+                let idx = px * 4;
+                row_rgba[idx] = ((r + grain).clamp(0, 65280) >> 8) as u8;
+                row_rgba[idx + 1] = ((g + grain).clamp(0, 65280) >> 8) as u8;
+                row_rgba[idx + 2] = ((b + grain).clamp(0, 65280) >> 8) as u8;
+                row_rgba[idx + 3] = 255;
+                r += dr;
+                g += dg;
+                b += db;
+            }
+
+            c_left = c_right;
+            x = span_end;
+            gx += 1;
+        }
+    }
+}
+
 /// Evaluates the foreground color and effective alpha `(fg_rgb, eff_alpha)` of an
 /// `SdfPrimitiveInstance` at `(px, py)` independent of the underlying backdrop pixel.
 /// The final composited pixel is `backdrop_color.lerp(fg_rgb, eff_alpha)`.
@@ -1266,6 +1729,26 @@ pub fn evaluate_sdf_instance_foreground(
             out_c.a = fill.a.max(0.90);
             fill = out_c;
         }
+        x if x == ShaderMaterialId::ElectricJellyfish as u32 => {
+            // 6. Electric Jellyfish Backdrop: Deep abyssal blue + drifting pulsing bioluminescent jellyfish blooms behind diffuse frosted glass
+            let avg_luma = (start_c.r + start_c.g + start_c.b + end_c.r + end_c.g + end_c.b) * 0.5;
+            let dark_theme = avg_luma < 1.5;
+            let mut jelly = evaluate_electric_jellyfish_backdrop(
+                uv_x,
+                uv_y,
+                inst.rect[2].max(1.0),
+                inst.rect[3].max(1.0),
+                t_sec,
+                dark_theme,
+            );
+            let lut = FireSimulationLut::global();
+            let grain = (lut.sample_turbulence(px * 0.14 + t_sec * 0.15, py * 0.14) - 0.5) * 0.025;
+            jelly.r = (jelly.r + grain).clamp(0.0, 1.0);
+            jelly.g = (jelly.g + grain).clamp(0.0, 1.0);
+            jelly.b = (jelly.b + grain).clamp(0.0, 1.0);
+            jelly.a = fill.a.max(0.95);
+            fill = jelly;
+        }
         _ => {}
     }
 
@@ -1368,6 +1851,7 @@ mod tests {
             reflective_glass_spirv(),
             color_cycling_glowbar_spirv(),
             flowing_gradient_spirv(),
+            electric_jellyfish_spirv(),
         ] {
             assert_eq!(validate_spirv_binary(&spirv), Ok(()));
         }
@@ -1439,6 +1923,7 @@ mod tests {
             ShaderMaterialId::ReflectiveGlass,
             ShaderMaterialId::ColorCyclingGlowbar,
             ShaderMaterialId::FlowingGentleGradient,
+            ShaderMaterialId::ElectricJellyfish,
         ] {
             let inst = SdfPrimitiveInstance {
                 rect: [10.0, 10.0, 200.0, 60.0],
@@ -1452,5 +1937,12 @@ mod tests {
             let diff = (c0.r - c1.r).abs() + (c0.g - c1.g).abs() + (c0.b - c1.b).abs();
             assert!(diff > 0.001, "Shader {:?} should vary across space/time", mat);
         }
+
+        // Verify ElectricJellyfishField precomputed scanline interpolation
+        let field = ElectricJellyfishField::compute(1920, 1080, 1.5, Some(Color::rgba(0.05, 0.08, 0.14, 1.0)));
+        let mut scanline = vec![0u8; 1920 * 4];
+        field.fill_scanline_rgba(540, 1920, &mut scanline);
+        assert_eq!(scanline[3], 255);
+        assert!(scanline[2] > scanline[0], "Abyssal ocean backdrop should be blue-dominant");
     }
 }

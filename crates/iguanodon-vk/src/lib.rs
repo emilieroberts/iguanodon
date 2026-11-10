@@ -940,9 +940,9 @@ impl VulkanRenderer {
     ) {
         let total_pixels = (width * height) as usize;
         let _ = iguanodon_shaders::FireSimulationLut::global();
-        let wallpaper = iguanodon_shaders::WaterDropWallpaper::global();
-
-        let (wp_x_map, wp_y_map) = wallpaper.compute_cover_crop_maps(width, height);
+        let jellyfish_field = clear_color.map(|_| {
+            iguanodon_shaders::ElectricJellyfishField::compute(width, height, time_sec, clear_color)
+        });
 
         #[derive(Clone, Copy)]
         struct PreparedInstance<'a> {
@@ -1051,27 +1051,14 @@ impl VulkanRenderer {
             let y_end = y_start + band_h;
             let row_stride = width as usize * 4;
 
-            // Fill background with the High-Quality 1080p Water Drop Macro Photo Wallpaper
-            // using uniform linear scaling to the constraining dimension and center-cropping the other dimension
-            if let Some(bg_tint) = clear_color {
-                let tr = (bg_tint.r.clamp(0.0, 1.0) * 255.0) as u32 * 18;
-                let tg = (bg_tint.g.clamp(0.0, 1.0) * 255.0) as u32 * 18;
-                let tb = (bg_tint.b.clamp(0.0, 1.0) * 255.0) as u32 * 18;
-                let wp_w = wallpaper.width as usize;
+            // Fill background with the Standard Animated Electric Jellyfish Backdrop Shader
+            // (deep abyssal blue ocean gradient + 5 drifting/pulsing bioluminescent blooms behind diffuse frosted glass)
+            if let Some(ref field) = jellyfish_field {
                 for local_y in 0..band_h {
-                    let y = (y_start + local_y) as usize;
-                    let (y0, _, _) = wp_y_map[y];
-                    let wp_row = &wallpaper.pixels_rgb[(y0 * wp_w)..((y0 + 1) * wp_w)];
+                    let y = y_start + local_y;
                     let row = &mut band_slice
                         [(local_y as usize * row_stride)..((local_y as usize + 1) * row_stride)];
-                    for (x, &(x0, _, _)) in wp_x_map.iter().enumerate() {
-                        let wp_px = wp_row[x0];
-                        let idx = x * 4;
-                        row[idx] = ((wp_px[0] as u32 * 238 + tr) >> 8) as u8;
-                        row[idx + 1] = ((wp_px[1] as u32 * 238 + tg) >> 8) as u8;
-                        row[idx + 2] = ((wp_px[2] as u32 * 238 + tb) >> 8) as u8;
-                        row[idx + 3] = 255;
-                    }
+                    field.fill_scanline_rgba(y, width, row);
                 }
             }
 
@@ -1237,7 +1224,8 @@ impl VulkanRenderer {
                             || mat == iguanodon_shaders::ShaderMaterialId::GentlePulsingLights as u32
                             || mat == iguanodon_shaders::ShaderMaterialId::ReflectiveGlass as u32
                             || mat == iguanodon_shaders::ShaderMaterialId::ColorCyclingGlowbar as u32
-                            || mat == iguanodon_shaders::ShaderMaterialId::FlowingGentleGradient as u32)
+                            || mat == iguanodon_shaders::ShaderMaterialId::FlowingGentleGradient as u32
+                            || mat == iguanodon_shaders::ShaderMaterialId::ElectricJellyfish as u32)
                         && span_min_x + 8 < span_max_x
                     {
                         // Left edge & corona

@@ -1186,6 +1186,21 @@ impl StandardBenchmarkApp {
         };
 
         // Top Bar & 3 Column Containers (demonstrating Gentle Smoke borders on TOP_BAR & MID_COL, and Fire border on LEFT_COL)
+        let is_dark_mode = self.active_theme_mode == ThemeMode::Dark;
+        let panel_alpha = if is_compose_ui {
+            1.0
+        } else if is_dark_mode {
+            0.66
+        } else {
+            0.46
+        };
+        let panel_material = if is_compose_ui {
+            ShaderMaterialId::StandardSdf
+        } else if base_material == ShaderMaterialId::ObsidianNeonPulse {
+            ShaderMaterialId::ObsidianNeonPulse
+        } else {
+            ShaderMaterialId::FrostedGlass
+        };
         for &panel in &[TOP_BAR, LEFT_COL, MID_COL, RIGHT_COL] {
             if let Some(r) = self.layout.bounds(panel) {
                 let raw_border = if panel == LEFT_COL {
@@ -1200,15 +1215,19 @@ impl StandardBenchmarkApp {
                     rect: r.to_array(),
                     corner_radii: [th.shapes.radius_lg; 4],
                     clip_rect: full_clip,
-                    fill_color_start: th.colors.surface.to_array(),
-                    fill_color_end: th.colors.surface_container.to_array(),
+                    fill_color_start: th.colors.surface.with_alpha(panel_alpha).to_array(),
+                    fill_color_end: th
+                        .colors
+                        .surface_container
+                        .with_alpha(panel_alpha)
+                        .to_array(),
                     border_color: th.colors.outline.to_array(),
                     shadow_color: [0.0, 0.0, 0.0, 0.45],
                     params: [
                         th.shapes.border_width.max(1.5),
                         if is_eco { 4.0 } else { th.optics.shadow_elevation_px },
                         p,
-                        pack_material_and_border(base_material, panel_border_effect),
+                        pack_material_and_border(panel_material, panel_border_effect),
                     ],
                 });
             }
