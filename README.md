@@ -13,6 +13,8 @@
 >
 > **Transparency Note:** This library, its Vulkan SDF shader pipeline, its pure `androidx.compose.runtime` Applier bridge, and its bundled AI porting skills were **built with Google Gemini 4**.
 
+![Iguanodon test app screenshot](docs/iguanodon_screen.png)
+
 ---
 
 ## Overview
