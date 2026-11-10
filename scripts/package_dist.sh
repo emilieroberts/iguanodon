@@ -223,7 +223,15 @@ EOF
 # 5. Build Pure-Runtime `:iguanodon-compose` Desktop JAR & Android AAR
 echo "[*] Building pure-runtime :iguanodon-compose via Gradle..."
 cd "${ROOT_DIR}/kotlin"
-./gradlew :iguanodon-compose:desktopJar :iguanodon-compose:assembleRelease --offline
+if [[ ! -w "${HOME}/.android" ]]; then
+    mkdir -p /tmp/iguanodon-android-home
+    export ANDROID_USER_HOME="/tmp/iguanodon-android-home"
+fi
+if [[ -d "${ANDROID_HOME:-}" || -d "${ANDROID_SDK_ROOT:-}" || -d "${HOME}/Android/Sdk" ]]; then
+    ./gradlew :iguanodon-compose:desktopJar :iguanodon-compose:assembleRelease --offline --no-daemon
+else
+    ./gradlew :iguanodon-compose:desktopJar --offline --no-daemon
+fi
 
 WORK_JAR="${ROOT_DIR}/target/dist-jar-work"
 rm -rf "${WORK_JAR}"

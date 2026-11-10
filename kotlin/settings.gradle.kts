@@ -45,5 +45,10 @@ dependencyResolutionManagement {
 rootProject.name = "iguanodon-kmp"
 
 include(":iguanodon-compose")
-include(":android-benchmark-app")
+val hasAndroidSdk = System.getenv("ANDROID_HOME")?.let { java.io.File(it).exists() } == true ||
+    System.getenv("ANDROID_SDK_ROOT")?.let { java.io.File(it).exists() } == true ||
+    java.io.File(System.getProperty("user.home"), "Android/Sdk").exists()
+if (hasAndroidSdk) {
+    include(":android-benchmark-app")
+}
 include(":desktop-benchmark-app")

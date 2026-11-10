@@ -845,9 +845,9 @@ fun Modifier.gentleSmoke(
 )
 
 fun Modifier.gentleSmokeBorder(
-    borderWidthDp: Float = 1.5f,
-    plumeReachPx: Float = 14.5f,
-    driftSpeed: Float = 0.22f,
+    borderWidthDp: Float = 2.0f,
+    plumeReachPx: Float = 28.0f,
+    driftSpeed: Float = 0.28f,
 ): Modifier = copyWith(
     borderW = maxOf(borderW, borderWidthDp),
     shaderId = IguanodonShaderMaterialId.GentleSmoke.id.toByte(),

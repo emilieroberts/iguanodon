@@ -969,11 +969,15 @@ impl VulkanRenderer {
                     || (inst.params[0] > 0.0
                         && (mat == iguanodon_shaders::ShaderMaterialId::ObsidianNeonPulse as u32
                             || (inst.border_color[0] > 0.9 && inst.border_color[1] < 0.35)));
+                let has_smoke = border_eff
+                    == iguanodon_shaders::BorderShaderEffect::GentleSmokeBorder
+                    || mat == iguanodon_shaders::ShaderMaterialId::GentleSmoke as u32;
                 let has_ext_halo = has_fire_border
-                    || border_eff == iguanodon_shaders::BorderShaderEffect::GentleSmokeBorder
-                    || mat == iguanodon_shaders::ShaderMaterialId::GentleSmoke as u32
+                    || has_smoke
                     || mat == iguanodon_shaders::ShaderMaterialId::ColorCyclingGlowbar as u32;
-                let margin = if has_ext_halo {
+                let margin = if has_smoke {
+                    28.0_f32.max(inst.params[1] * 2.2)
+                } else if has_ext_halo {
                     16.0_f32.max(inst.params[1] * 2.0)
                 } else {
                     inst.params[1] * 2.0 + 2.0
@@ -992,7 +996,9 @@ impl VulkanRenderer {
                     return None;
                 }
 
-                let inset = if has_ext_halo {
+                let inset = if has_smoke {
+                    inst.corner_radii[0] + inst.params[0] + 12.0
+                } else if has_ext_halo {
                     inst.corner_radii[0] + inst.params[0] + 6.5
                 } else {
                     inst.corner_radii[0] + inst.params[0] + 4.0
