@@ -1,0 +1,17 @@
+[package]
+name = "iguanodon-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "benchmark_app"
+path = "src/bin/benchmark_app.rs"
+
+[dependencies]
+iguanodon-core = { path = "../iguanodon-core" }
+iguanodon-theme = { path = "../iguanodon-theme" }
+iguanodon-layout = { path = "../iguanodon-layout" }
+iguanodon-widgets = { path = "../iguanodon-widgets" }
+iguanodon-vk = { path = "../iguanodon-vk" }
+iguanodon-ffi = { path = "../iguanodon-ffi" }

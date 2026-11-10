@@ -1,0 +1,14 @@
+[package]
+name = "iguanodon-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+iguanodon-core = { path = "../iguanodon-core" }
+iguanodon-theme = { path = "../iguanodon-theme" }
+iguanodon-layout = { path = "../iguanodon-layout" }
+iguanodon-widgets = { path = "../iguanodon-widgets" }

@@ -1,0 +1,9 @@
+[package]
+name = "iguanodon-vk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+iguanodon-core = { path = "../iguanodon-core" }
+iguanodon-shaders = { path = "../iguanodon-shaders" }

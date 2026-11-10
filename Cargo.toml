@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/iguanodon-core",
+    "crates/iguanodon-theme",
+    "crates/iguanodon-layout",
+    "crates/iguanodon-text",
+    "crates/iguanodon-shaders",
+    "crates/iguanodon-vk",
+    "crates/iguanodon-widgets",
+    "crates/iguanodon-ffi",
+    "crates/iguanodon-platform",
+    "tools/token-sync",
+]
+
+[workspace.package]
+version = "0.0.1-alpha"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Emilie Roberts"]
+repository = "https://github.com/emilieroberts/iguanodon"

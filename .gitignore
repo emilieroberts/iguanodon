@@ -1,0 +1,22 @@
+# Rust / Cargo build outputs
+/target/
+
+# Gradle & Kotlin Multiplatform build outputs
+/kotlin/.gradle/
+/kotlin/build/
+/kotlin/*/build/
+/kotlin/.kotlin/
+/kotlin/local.properties
+
+# Distributable large static archives & temporary build folders
+/dist/native/linux-x86_64/libiguanodon_ffi.a
+
+# Temporary snapshots, keystores, and IDE files
+*.ppm
+*.keystore
+*.idsig
+*.apk
+.idea/
+.vscode/
+*.iml
+.DS_Store

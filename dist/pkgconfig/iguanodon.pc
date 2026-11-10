@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/..
+exec_prefix=${prefix}
+libdir=${exec_prefix}/native/linux-x86_64
+includedir=${prefix}/include
+
+Name: iguanodon
+Description: Iguanodon High-Performance Vulkan UI Toolkit (Rust / Pure Compose Runtime / Qt / GTK)
+Version: 0.0.1-alpha
+Libs: -L${libdir} -liguanodon_ffi -ldl -lpthread -lm
+Cflags: -I${includedir}
