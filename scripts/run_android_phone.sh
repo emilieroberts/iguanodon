@@ -98,9 +98,16 @@ cp "${SO_PATH}" "${JNI_LIB_DIR}/libiguanodon_ffi.so"
 echo "[+] Copied arm64-v8a/libiguanodon_ffi.so into Android module."
 
 # 3. Package & Sign APK using Gradle if available, or directly via Android SDK build-tools (aapt2 + javac + d8 + apksigner)
+APP_ID="dev.iguanodon.android.benchmark"
+echo "[*] Removing any previous installation of ${APP_ID} on ${MODEL} to prevent signature/version conflicts..."
+adb -s "${SERIAL}" uninstall "${APP_ID}" >/dev/null 2>&1 || true
+
 if [[ -x "${ROOT_DIR}/kotlin/gradlew" ]]; then
     cd "${ROOT_DIR}/kotlin"
-    ./gradlew :android-benchmark-app:installDebug
+    ./gradlew :android-benchmark-app:assembleDebug
+    GRADLE_APK="${ROOT_DIR}/kotlin/android-benchmark-app/build/outputs/apk/debug/android-benchmark-app-debug.apk"
+    echo "[*] Installing ${GRADLE_APK} onto ${MODEL} (${SERIAL})..."
+    adb -s "${SERIAL}" install -r -d -t "${GRADLE_APK}"
 else
     BUILD_TOOLS_DIR="$(find "${ANDROID_HOME}/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n1)"
     PLATFORM_DIR="$(find "${ANDROID_HOME}/platforms" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -n1)"
