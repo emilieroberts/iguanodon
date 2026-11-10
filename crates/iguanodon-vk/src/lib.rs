@@ -953,8 +953,10 @@ impl VulkanRenderer {
             max_y: u32,
             inner_min_x: u32,
             inner_max_x: u32,
-            inner_min_y: u32,
-            inner_max_y: u32,
+            border_min_y: u32,
+            border_max_y: u32,
+            mid_min_y: u32,
+            mid_max_y: u32,
             can_span_fill_interior: bool,
             has_fire_border: bool,
         }
@@ -976,9 +978,9 @@ impl VulkanRenderer {
                     || has_smoke
                     || mat == iguanodon_shaders::ShaderMaterialId::ColorCyclingGlowbar as u32;
                 let margin = if has_smoke {
-                    28.0_f32.max(inst.params[1] * 2.2)
+                    30.0_f32.max(inst.params[1] * 2.2)
                 } else if has_ext_halo {
-                    16.0_f32.max(inst.params[1] * 2.0)
+                    18.0_f32.max(inst.params[1] * 2.0)
                 } else {
                     inst.params[1] * 2.0 + 2.0
                 };
@@ -996,20 +998,24 @@ impl VulkanRenderer {
                     return None;
                 }
 
-                let inset = if has_smoke {
-                    inst.corner_radii[0] + inst.params[0] + 12.0
-                } else if has_ext_halo {
-                    inst.corner_radii[0] + inst.params[0] + 6.5
+                let border_inset = if has_ext_halo {
+                    inst.params[0] + 6.5
                 } else {
-                    inst.corner_radii[0] + inst.params[0] + 4.0
+                    inst.params[0] + 4.0
                 };
-                let ix0 = (inst.rect[0] + inset).max(x0 as f32).ceil() as u32;
-                let iy0 = (inst.rect[1] + inset).max(y0 as f32).ceil() as u32;
-                let ix1 = (inst.rect[0] + inst.rect[2] - inset)
+                let corner_inset = inst.corner_radii[0] + border_inset;
+                let ix0 = (inst.rect[0] + corner_inset).max(x0 as f32).ceil() as u32;
+                let ix1 = (inst.rect[0] + inst.rect[2] - corner_inset)
                     .min(x1 as f32)
                     .max(0.0)
                     .floor() as u32;
-                let iy1 = (inst.rect[1] + inst.rect[3] - inset)
+                let by0 = (inst.rect[1] + border_inset).max(y0 as f32).ceil() as u32;
+                let by1 = (inst.rect[1] + inst.rect[3] - border_inset)
+                    .min(y1 as f32)
+                    .max(0.0)
+                    .floor() as u32;
+                let my0 = (inst.rect[1] + corner_inset).max(y0 as f32).ceil() as u32;
+                let my1 = (inst.rect[1] + inst.rect[3] - corner_inset)
                     .min(y1 as f32)
                     .max(0.0)
                     .floor() as u32;
@@ -1019,7 +1025,8 @@ impl VulkanRenderer {
                     || mat == iguanodon_shaders::ShaderMaterialId::ObsidianNeonPulse as u32
                     || mat == iguanodon_shaders::ShaderMaterialId::TexturedImage as u32
                     || mat == iguanodon_shaders::ShaderMaterialId::FrostedGlass as u32)
-                    && ix0 < ix1;
+                    && ix0 < ix1
+                    && by0 < by1;
 
                 Some(PreparedInstance {
                     inst,
@@ -1029,8 +1036,10 @@ impl VulkanRenderer {
                     max_y: y1,
                     inner_min_x: ix0,
                     inner_max_x: ix1,
-                    inner_min_y: iy0,
-                    inner_max_y: iy1,
+                    border_min_y: by0,
+                    border_max_y: by1,
+                    mid_min_y: my0,
+                    mid_max_y: my1,
                     can_span_fill_interior,
                     has_fire_border: has_ext_halo,
                 })
@@ -1088,11 +1097,14 @@ impl VulkanRenderer {
                     let inst = p.inst;
                     let (mat, _) = iguanodon_shaders::unpack_material_and_border(inst.params[3]);
 
+                    let in_y_interior = y >= p.border_min_y && y < p.border_max_y;
+                    let in_y_midsection = y >= p.mid_min_y && y < p.mid_max_y;
+
                     // Along the straight vertical midsection (outside top/bottom corner arcs),
                     // the border & rim only extend `border_w + 5.5` px inward, not `corner_r + border_w + 6.5`.
-                    let (span_min_x, span_max_x) = if y >= p.inner_min_y && y < p.inner_max_y {
+                    let (span_min_x, span_max_x) = if in_y_midsection {
                         let side_inset = if p.has_fire_border {
-                            inst.params[0] + 6.0
+                            inst.params[0] + 6.5
                         } else {
                             inst.params[0] + 2.5
                         };
@@ -1110,9 +1122,7 @@ impl VulkanRenderer {
                         (p.inner_min_x, p.inner_max_x)
                     };
 
-                    if p.can_span_fill_interior
-                        && (!p.has_fire_border || (y >= p.inner_min_y && y < p.inner_max_y))
-                    {
+                    if p.can_span_fill_interior && in_y_interior && span_min_x < span_max_x {
                         // Left border/corner edge
                         for x in p.min_x..span_min_x {
                             let idx = (x as usize) * 4;
@@ -1138,9 +1148,8 @@ impl VulkanRenderer {
 
                         // Constant-Y horizontal span blend across [span_min_x, span_max_x)
                         // Evaluates foreground + alpha once for the span and blends against EACH pixel's actual backdrop!
-                        let (fg_col, eff_alpha) = if y >= p.inner_min_y
-                            && y < p.inner_max_y
-                            && mat != iguanodon_shaders::ShaderMaterialId::FrostedGlass as u32
+                        let (fg_col, eff_alpha) = if mat
+                            != iguanodon_shaders::ShaderMaterialId::FrostedGlass as u32
                         {
                             let uv_y =
                                 ((py - inst.rect[1]) / inst.rect[3].max(1.0)).clamp(0.0, 1.0);
@@ -1223,14 +1232,12 @@ impl VulkanRenderer {
                             row[idx + 2] = (c.b.clamp(0.0, 1.0) * 255.0) as u8;
                             row[idx + 3] = 255;
                         }
-                    } else if (p.has_fire_border
-                        || mat == iguanodon_shaders::ShaderMaterialId::ProceduralFire as u32
-                        || mat == iguanodon_shaders::ShaderMaterialId::WaterRipple as u32
-                        || mat == iguanodon_shaders::ShaderMaterialId::GentleSmoke as u32
-                        || mat == iguanodon_shaders::ShaderMaterialId::GentlePulsingLights as u32
-                        || mat == iguanodon_shaders::ShaderMaterialId::ReflectiveGlass as u32
-                        || mat == iguanodon_shaders::ShaderMaterialId::ColorCyclingGlowbar as u32
-                        || mat == iguanodon_shaders::ShaderMaterialId::FlowingGentleGradient as u32)
+                    } else if in_y_interior
+                        && (mat == iguanodon_shaders::ShaderMaterialId::WaterRipple as u32
+                            || mat == iguanodon_shaders::ShaderMaterialId::GentlePulsingLights as u32
+                            || mat == iguanodon_shaders::ShaderMaterialId::ReflectiveGlass as u32
+                            || mat == iguanodon_shaders::ShaderMaterialId::ColorCyclingGlowbar as u32
+                            || mat == iguanodon_shaders::ShaderMaterialId::FlowingGentleGradient as u32)
                         && span_min_x + 8 < span_max_x
                     {
                         // Left edge & corona

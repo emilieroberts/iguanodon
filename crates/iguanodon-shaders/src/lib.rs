@@ -572,17 +572,34 @@ impl FireSimulationLut {
 
     #[inline]
     pub fn sample_turbulence(&self, x: f32, y: f32) -> f32 {
-        let xi = (x * 16.0) as i32;
-        let yi = (y * 16.0) as i32;
-        let idx = ((yi & 255) as usize) * 256 + ((xi & 255) as usize);
-        self.turbulence_256[idx]
+        let sx = x * 16.0;
+        let sy = y * 16.0;
+        let fx = sx.floor();
+        let fy = sy.floor();
+        let tx = sx - fx;
+        let ty = sy - fy;
+        let x0 = (fx as i32) & 255;
+        let y0 = (fy as i32) & 255;
+        let x1 = (x0 + 1) & 255;
+        let y1 = (y0 + 1) & 255;
+
+        let r0 = (y0 as usize) * 256;
+        let r1 = (y1 as usize) * 256;
+        let v00 = self.turbulence_256[r0 + x0 as usize];
+        let v10 = self.turbulence_256[r0 + x1 as usize];
+        let v01 = self.turbulence_256[r1 + x0 as usize];
+        let v11 = self.turbulence_256[r1 + x1 as usize];
+
+        let top = v00 + (v10 - v00) * tx;
+        let bot = v01 + (v11 - v01) * tx;
+        top + (bot - top) * ty
     }
 
     #[inline]
     pub fn sample_warped_fire(&self, nx: f32, ny: f32) -> f32 {
         let qx = self.sample_turbulence(nx, ny) - 0.5;
         let qy = self.sample_turbulence(nx + 4.1, ny + 2.7) - 0.5;
-        self.sample_turbulence(nx + qx * 1.8, ny * 1.3 + qy * 1.8)
+        self.sample_turbulence(nx + qx * 1.8, ny + qy * 1.8)
     }
 
     #[inline]
@@ -983,43 +1000,39 @@ pub fn evaluate_sdf_instance_foreground(
             0.0
         };
 
-        if (has_smoke_border || material_id == ShaderMaterialId::GentleSmoke as u32) && dist < 28.0 {
+        if (has_smoke_border || material_id == ShaderMaterialId::GentleSmoke as u32) && dist < 30.0 {
             let lut = FireSimulationLut::global();
-            let drift = (t_sec * 0.28 + uv_y * 2.1).sin() * 0.45;
-            let nx = (px - inst.rect[0]) * 0.022 + drift;
-            let ny = (py - inst.rect[1]) * 0.026 + t_sec * 0.42;
-            let f1 = lut.sample_warped_fire(nx, ny);
-            let f2 = lut.sample_turbulence(nx * 1.9 - t_sec * 0.18, ny * 1.9 + 3.4);
-            let wisp = (f1 * 0.68 + f2 * 0.52).clamp(0.0, 1.0);
-            let reach = if local.y < 0.0 { 28.0 } else { 22.0 };
-            // Warped outer boundary so individual smoke plumes billow unevenly beyond the border
-            let dynamic_reach = reach * (0.68 + 0.48 * wisp);
-            if dist < dynamic_reach {
-                let falloff = (1.0 - dist / dynamic_reach).clamp(0.0, 1.0);
-                let plume_shape = ((wisp - 0.10 * (1.0 - falloff)) * 1.48).clamp(0.0, 1.0);
-                let mist_a = (falloff.sqrt() * (0.42 + 0.58 * plume_shape) * 0.92).clamp(0.0, 0.94);
+            let drift = (t_sec * 0.22 + uv_y * 1.8).sin() * 0.35;
+            let nx = (px - inst.rect[0]) * 0.024 + drift;
+            let ny = (py - inst.rect[1]) * 0.028 + t_sec * 0.34;
+            let top_bias = (1.0 - uv_y).clamp(0.0, 1.0);
+            let reach = 22.0 + 8.0 * top_bias;
+            if dist < reach {
+                let falloff = (1.0 - dist / reach).clamp(0.0, 1.0);
+                // Keep smoke wispy (clear transparent space between tendrils) while extending further before dissipating
+                let threshold = 0.16 + 0.10 * (1.0 - falloff);
+                let wisp = ((lut.sample_warped_fire(nx, ny) - threshold) * 1.35).clamp(0.0, 1.0);
+                let mist_a = (wisp * falloff * (0.48 + 0.42 * falloff) * 0.76).clamp(0.0, 1.0);
                 if mist_a > 0.01 {
-                    let outer_mist = Color::rgba(0.76, 0.87, 0.99, 1.0);
-                    let core_mist = Color::rgba(0.96, 0.99, 1.0, 1.0);
-                    let mist_c = outer_mist.lerp(core_mist, (falloff * 0.65 + plume_shape * 0.35).clamp(0.0, 1.0));
+                    let mist_c = Color::rgba(0.84, 0.91, 0.99, 1.0);
                     let combined = sh_alpha * (1.0 - mist_a) + mist_a;
                     sh_col = sh_col.lerp(mist_c, (mist_a / combined.max(1e-4)).clamp(0.0, 1.0));
                     sh_alpha = combined.clamp(0.0, 1.0);
                 }
             }
-        } else if has_fire_border && dist < 16.0 {
+        } else if has_fire_border && dist < 18.0 {
             let lut = FireSimulationLut::global();
             let wind = ((px - pointer.x) * 0.0045).clamp(-0.35, 0.35);
             let nx = (px - inst.rect[0]) * 0.045 + wind * (1.0 - uv_y);
             let ny = (py - inst.rect[1]) * 0.055 + t_sec * 1.65;
 
             let flame_noise = lut.sample_warped_fire(nx, ny);
+            // Smooth vertical transition from bottom to top (no step cutoff at local.y == 0.0!)
+            let top_boost = (1.0 - uv_y).clamp(0.0, 1.0);
             let upward_reach = if material_id == ShaderMaterialId::ProceduralFire as u32 {
-                if local.y < 0.0 { 14.0 } else { 7.5 }
-            } else if local.y < 0.0 {
-                11.5
+                8.5 + 6.5 * top_boost
             } else {
-                6.5
+                7.0 + 5.5 * top_boost
             };
             let corona_falloff = (1.0 - (dist / upward_reach)).clamp(0.0, 1.0);
             let temp = (corona_falloff * (0.42 + flame_noise * 0.85)).clamp(0.0, 1.0);
@@ -1080,25 +1093,23 @@ pub fn evaluate_sdf_instance_foreground(
         x if x == ShaderMaterialId::ProceduralFire as u32 => {
             let lut = FireSimulationLut::global();
             let wind = ((px - pointer.x) * 0.004).clamp(-0.3, 0.3);
-            let nx = (px - inst.rect[0]) * 0.04 + wind * (1.0 - uv_y);
-            let ny = (py - inst.rect[1]) * 0.06 + t_sec * 1.55;
+            let nx = (px - inst.rect[0]) * 0.038 + wind * (1.0 - uv_y);
+            let ny = (py - inst.rect[1]) * 0.048 + t_sec * 1.55;
 
             let fbm = lut.sample_warped_fire(nx, ny);
 
-            // Fast polynomial approximations instead of slow powf() per pixel
-            let rim_t = (1.0 - (-dist * (1.0 / 18.0)).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+            // Continuous full-height flame profile (no mid-element cutoff from per-pixel fill brightness!)
+            let rim_t = (1.0 - (-dist * (1.0 / 16.0)).clamp(0.0, 1.0)).clamp(0.0, 1.0);
             let rim_factor = rim_t * rim_t;
-            let hearth_factor = uv_y * uv_y;
-            let raw_heat = (rim_factor * 0.62 + hearth_factor * 0.58) * (0.38 + fbm * 0.95);
-            let temp = raw_heat.clamp(0.0, 1.0);
-
-            let is_light_surface = (fill.r + fill.g + fill.b) > 1.5;
+            let hearth_factor = 0.46 + 0.54 * uv_y;
+            let raw_heat = (hearth_factor * (0.38 + fbm * 0.92) + rim_factor * 0.38).clamp(0.0, 1.0);
+            let temp = raw_heat;
             let fire_col = lut.lookup_blackbody(temp);
 
             // Rising micro-ember sparks
-            let spark_cell_x = ((px + wind * 18.0) * 0.18) as i32;
+            let spark_cell_x = ((px + wind * 18.0) * 0.18).floor() as i32;
             let spark_y_coord = py * 0.18 + t_sec * 4.5;
-            let spark_cell_y = spark_y_coord as i32;
+            let spark_cell_y = spark_y_coord.floor() as i32;
             let spark_seed = hash21(spark_cell_x, spark_cell_y);
             let spark_intensity = if spark_seed > 0.965 {
                 let fy = spark_y_coord - (spark_cell_y as f32);
@@ -1107,22 +1118,11 @@ pub fn evaluate_sdf_instance_foreground(
                 0.0
             };
 
-            let mut fire_fill = if is_light_surface {
-                // Light Mode Solar Fire: warm sunlit ivory/amber interior with molten rim & high-contrast dark text legibility
-                let solar_base = Color::rgba(1.0, 0.96, 0.91, fill.a.max(0.90)).lerp(fill, 0.35);
-                let rim_ember = (rim_factor * 0.72 + temp * 0.28).clamp(0.0, 0.78);
-                solar_base
-                    .lerp(fire_col, rim_ember)
-                    .lerp(Color::rgba(1.0, 0.82, 0.35, 1.0), spark_intensity * 0.65)
-            } else {
-                // Dark Mode Volcanic Fire: deep charcoal-ember hearth with incandescent blackbody flames
-                let charcoal_base =
-                    Color::rgba(0.09, 0.04, 0.05, fill.a.max(0.88)).lerp(fill, 0.18);
-                let ember_blend = (temp * 0.88).clamp(0.0, 0.92);
-                charcoal_base
-                    .lerp(fire_col, ember_blend)
-                    .lerp(Color::rgba(1.0, 0.95, 0.78, 1.0), spark_intensity * 0.85)
-            };
+            let charcoal_base = Color::rgba(0.11, 0.04, 0.05, fill.a.max(0.90));
+            let ember_blend = (temp * 0.90).clamp(0.18, 0.94);
+            let mut fire_fill = charcoal_base
+                .lerp(fire_col, ember_blend)
+                .lerp(Color::rgba(1.0, 0.95, 0.78, 1.0), spark_intensity * 0.85);
             fire_fill.a = 0.94;
             fill = fire_fill;
         }
@@ -1169,24 +1169,23 @@ pub fn evaluate_sdf_instance_foreground(
             }
         }
         x if x == ShaderMaterialId::GentleSmoke as u32 => {
-            // 1. Gentle Smoke: Pronounced, billowing volumetric vapor plumes drifting upward
+            // 1. Gentle Smoke: Soft, wispy laminar vapor tendrils drifting slowly upward
             let lut = FireSimulationLut::global();
-            let sway = (t_sec * 0.26 + uv_y * 2.4).sin() * 0.36;
-            let nx = (px - inst.rect[0]) * 0.020 + sway * (1.0 - uv_y * 0.5);
-            let ny = (py - inst.rect[1]) * 0.024 + t_sec * 0.38;
+            let sway = (t_sec * 0.22 + uv_y * 2.4).sin() * 0.28;
+            let nx = (px - inst.rect[0]) * 0.020 + sway * (1.0 - uv_y * 0.6);
+            let ny = (py - inst.rect[1]) * 0.024 + t_sec * 0.32;
             let fbm = lut.sample_warped_fire(nx, ny);
-            let detail = lut.sample_turbulence(nx * 2.1 - t_sec * 0.16, ny * 2.1 + 1.9);
-            let wisp = ((fbm * 0.72 + detail * 0.42 - 0.12) * 1.38).clamp(0.0, 1.0);
-            let density = (wisp * (0.55 + 0.45 * (1.0 - uv_y * 0.35))).clamp(0.0, 0.95);
-            let is_light = (fill.r + fill.g + fill.b) > 1.5;
-            let plume_color = if is_light {
-                Color::rgba(0.62, 0.74, 0.90, 1.0)
+            let wisp = ((fbm - 0.18) * 1.25).clamp(0.0, 1.0);
+            let density = (wisp * wisp * (0.48 + 0.52 * (1.0 - uv_y * 0.40))).clamp(0.0, 0.88);
+            let avg_luma = (start_c.r + start_c.g + start_c.b + end_c.r + end_c.g + end_c.b) * 0.5;
+            let plume_color = if avg_luma > 1.5 {
+                Color::rgba(0.68, 0.76, 0.88, 1.0)
             } else {
-                Color::rgba(0.88, 0.95, 1.0, 1.0)
+                Color::rgba(0.84, 0.90, 0.98, 1.0)
             };
             let prev_a = fill.a;
-            fill = fill.lerp(plume_color, (density * 0.82).clamp(0.0, 0.92));
-            fill.a = (prev_a * 0.85 + density * 0.18).clamp(0.68, 0.96);
+            fill = fill.lerp(plume_color, density * 0.68);
+            fill.a = (prev_a * 0.82 + density * 0.16).clamp(0.62, 0.94);
         }
         x if x == ShaderMaterialId::GentlePulsingLights as u32 => {
             // 2. Gently Pulsing Lights: Three soft phase-offset breathing ambient bokeh light orbs (slow & calm)
@@ -1271,20 +1270,20 @@ pub fn evaluate_sdf_instance_foreground(
     }
 
     // Interior rim & border stroke for GentleSmokeBorder or FireBorder
-    let interior_reach = if has_smoke_border { 11.5 } else { 5.5 };
-    if border_w > 0.0 && dist > -border_w - interior_reach {
+    if border_w > 0.0 && dist > -border_w - 5.5 {
         if has_smoke_border {
             let lut = FireSimulationLut::global();
-            let sway = (t_sec * 0.28 + uv_y * 2.2).sin() * 0.38;
-            let nx = (px - inst.rect[0]) * 0.026 + sway;
-            let ny = (py - inst.rect[1]) * 0.030 + t_sec * 0.42;
+            let sway = (t_sec * 0.24 + uv_y * 2.0).sin() * 0.30;
+            let nx = (px - inst.rect[0]) * 0.032 + sway;
+            let ny = (py - inst.rect[1]) * 0.036 + t_sec * 0.38;
             let fbm = lut.sample_warped_fire(nx, ny);
-            let rim_t = (1.0 - ((-dist) / (border_w + 11.5)).clamp(0.0, 1.0)).clamp(0.0, 1.0);
-            let wisp = (rim_t.sqrt() * (0.48 + fbm * 0.92)).clamp(0.0, 1.0);
-            let smoke_c = Color::rgba(0.90, 0.96, 1.0, 0.98);
+            let rim_t = (1.0 - ((-dist) / (border_w + 5.5)).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+            let wisp_noise = ((fbm - 0.14) * 1.32).clamp(0.0, 1.0);
+            let wisp = (rim_t * wisp_noise).clamp(0.0, 1.0);
+            let smoke_c = Color::rgba(0.86, 0.93, 1.0, 0.95);
             let prev_a = fill.a;
-            fill = fill.lerp(smoke_c, (wisp * 0.92).clamp(0.0, 1.0));
-            fill.a = prev_a.max(rim_t * 0.96);
+            fill = fill.lerp(smoke_c, (wisp * 0.85).clamp(0.0, 1.0));
+            fill.a = prev_a.max(rim_t * 0.92);
         } else if has_fire_border && material_id != ShaderMaterialId::ProceduralFire as u32 {
             let lut = FireSimulationLut::global();
             let wind = ((px - pointer.x) * 0.004).clamp(-0.3, 0.3);
