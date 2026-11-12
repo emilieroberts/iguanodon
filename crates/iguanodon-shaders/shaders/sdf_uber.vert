@@ -47,7 +47,7 @@ void main() {
         q_max = min(inst.rect.xy + inst.rect.zw, c_max);
     } else {
         float halo = inst.params.y * 2.5 + inst.params.x + 3.0;
-        if (border_fx != 0u || mat == 2u || mat == 7u) {
+        if (border_fx != 0u || mat == 2u || mat == 5u || mat == 7u || mat == 10u) {
             halo = max(halo, 32.0);
         }
         q_min = inst.rect.xy - vec2(halo);
@@ -60,7 +60,7 @@ void main() {
             abs(inst.clip_rect.y - inst.rect.y) < 1.0 &&
             abs(inst.clip_rect.z - inst.rect.z) < 1.0 &&
             abs(inst.clip_rect.w - inst.rect.w) < 1.0;
-        if (clip_is_self && (border_fx != 0u || mat == 2u || mat == 7u)) {
+        if (clip_is_self && (border_fx != 0u || mat == 2u || mat == 5u || mat == 7u || mat == 10u)) {
             c_min -= vec2(32.0);
             c_max += vec2(32.0);
         }
