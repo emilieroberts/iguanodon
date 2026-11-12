@@ -106,6 +106,7 @@ const VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR: u32 = 1000008000;
 const VK_BUFFER_USAGE_TRANSFER_SRC_BIT: u32 = 0x00000001;
 const VK_BUFFER_USAGE_TRANSFER_DST_BIT: u32 = 0x00000002;
 const VK_BUFFER_USAGE_STORAGE_BUFFER_BIT: u32 = 0x00000020;
+const VK_BUFFER_USAGE_INDEX_BUFFER_BIT: u32 = 0x00000040;
 const VK_BUFFER_USAGE_VERTEX_BUFFER_BIT: u32 = 0x00000080;
 
 const VK_IMAGE_USAGE_TRANSFER_SRC_BIT: u32 = 0x00000001;
@@ -119,6 +120,11 @@ const VK_MEMORY_PROPERTY_HOST_COHERENT_BIT: u32 = 0x00000004;
 
 const VK_FORMAT_R8G8B8A8_UNORM: u32 = 37;
 const VK_FORMAT_B8G8R8A8_UNORM: u32 = 44;
+const VK_FORMAT_R32G32B32A32_SFLOAT: u32 = 109;
+
+const VK_VERTEX_INPUT_RATE_VERTEX: u32 = 0;
+const VK_INDEX_TYPE_UINT32: u32 = 1;
+const MAX_GPU_INSTANCES: usize = 16384;
 
 const VK_IMAGE_LAYOUT_UNDEFINED: u32 = 0;
 const VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: u32 = 2;
@@ -574,14 +580,39 @@ struct VkPipelineShaderStageCreateInfo {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+struct VkVertexInputBindingDescription {
+    binding: u32,
+    stride: u32,
+    input_rate: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct VkVertexInputAttributeDescription {
+    location: u32,
+    binding: u32,
+    format: u32,
+    offset: u32,
+}
+
+/// 16-byte GPU vertex (`vec4 in_pos_uv` at `location = 0`) stored in `VulkanRenderer::vertex_buffer`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GpuQuadVertex {
+    pub pos_px: [f32; 2],
+    pub uv: [f32; 2],
+}
+
+#[repr(C)]
 struct VkPipelineVertexInputStateCreateInfo {
     s_type: u32,
     p_next: *const c_void,
     flags: VkFlags,
     vertex_binding_description_count: u32,
-    p_vertex_binding_descriptions: *const c_void,
+    p_vertex_binding_descriptions: *const VkVertexInputBindingDescription,
     vertex_attribute_description_count: u32,
-    p_vertex_attribute_descriptions: *const c_void,
+    p_vertex_attribute_descriptions: *const VkVertexInputAttributeDescription,
 }
 
 #[repr(C)]
@@ -967,7 +998,11 @@ struct VulkanFnTable {
     vkCmdPushConstants: unsafe extern "C" fn(VkCommandBuffer, VkPipelineLayout, VkFlags, u32, u32, *const c_void),
     vkCmdSetViewport: unsafe extern "C" fn(VkCommandBuffer, u32, u32, *const VkViewport),
     vkCmdSetScissor: unsafe extern "C" fn(VkCommandBuffer, u32, u32, *const VkRect2D),
+    vkCmdBindVertexBuffers: unsafe extern "C" fn(VkCommandBuffer, u32, u32, *const VkBuffer, *const VkDeviceSize),
+    vkCmdBindIndexBuffer: unsafe extern "C" fn(VkCommandBuffer, VkBuffer, VkDeviceSize, u32),
+    #[allow(dead_code)]
     vkCmdDraw: unsafe extern "C" fn(VkCommandBuffer, u32, u32, u32, u32),
+    vkCmdDrawIndexed: unsafe extern "C" fn(VkCommandBuffer, u32, u32, u32, i32, u32),
     vkCreateQueryPool: unsafe extern "C" fn(VkDevice, *const VkQueryPoolCreateInfo, *const c_void, *mut VkQueryPool) -> VkResult,
     vkDestroyQueryPool: unsafe extern "C" fn(VkDevice, VkQueryPool, *const c_void),
     vkCmdResetQueryPool: unsafe extern "C" fn(VkCommandBuffer, VkQueryPool, u32, u32),
@@ -1082,7 +1117,10 @@ impl VulkanFnTable {
             vkCmdPushConstants: sym!("vkCmdPushConstants"),
             vkCmdSetViewport: sym!("vkCmdSetViewport"),
             vkCmdSetScissor: sym!("vkCmdSetScissor"),
+            vkCmdBindVertexBuffers: sym!("vkCmdBindVertexBuffers"),
+            vkCmdBindIndexBuffer: sym!("vkCmdBindIndexBuffer"),
             vkCmdDraw: sym!("vkCmdDraw"),
+            vkCmdDrawIndexed: sym!("vkCmdDrawIndexed"),
             vkCreateQueryPool: sym!("vkCreateQueryPool"),
             vkDestroyQueryPool: sym!("vkDestroyQueryPool"),
             vkCmdResetQueryPool: sym!("vkCmdResetQueryPool"),
@@ -1209,6 +1247,12 @@ pub struct VulkanRenderer {
     instance_buffer: VkBuffer,
     instance_memory: VkDeviceMemory,
     instance_buffer_capacity: usize,
+    vertex_buffer: VkBuffer,
+    vertex_memory: VkDeviceMemory,
+    vertex_buffer_capacity: usize,
+    index_buffer: VkBuffer,
+    index_memory: VkDeviceMemory,
+    index_buffer_capacity: usize,
     command_pool: VkCommandPool,
     command_buffer: VkCommandBuffer,
     query_pool: VkQueryPool,
@@ -1279,6 +1323,12 @@ impl VulkanRenderer {
             instance_buffer: 0,
             instance_memory: 0,
             instance_buffer_capacity: 0,
+            vertex_buffer: 0,
+            vertex_memory: 0,
+            vertex_buffer_capacity: 0,
+            index_buffer: 0,
+            index_memory: 0,
+            index_buffer_capacity: 0,
             command_pool: 0,
             command_buffer: ptr::null_mut(),
             query_pool: 0,
@@ -1705,14 +1755,25 @@ impl VulkanRenderer {
             },
         ];
 
+        let binding_desc = VkVertexInputBindingDescription {
+            binding: 0,
+            stride: std::mem::size_of::<GpuQuadVertex>() as u32,
+            input_rate: VK_VERTEX_INPUT_RATE_VERTEX,
+        };
+        let attr_desc = VkVertexInputAttributeDescription {
+            location: 0,
+            binding: 0,
+            format: VK_FORMAT_R32G32B32A32_SFLOAT,
+            offset: 0,
+        };
         let vertex_input = VkPipelineVertexInputStateCreateInfo {
             s_type: VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: 0,
-            vertex_binding_description_count: 0,
-            p_vertex_binding_descriptions: ptr::null(),
-            vertex_attribute_description_count: 0,
-            p_vertex_attribute_descriptions: ptr::null(),
+            vertex_binding_description_count: 1,
+            p_vertex_binding_descriptions: &binding_desc,
+            vertex_attribute_description_count: 1,
+            p_vertex_attribute_descriptions: &attr_desc,
         };
         let input_assembly = VkPipelineInputAssemblyStateCreateInfo {
             s_type: VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -1996,13 +2057,13 @@ impl VulkanRenderer {
         }
 
         // Allocate a real Vulkan host-visible instance buffer for up to 16,384 SDF & glyph instances (2 MB)
-        let buffer_cap_bytes = 16384 * std::mem::size_of::<SdfPrimitiveInstance>();
+        let buffer_cap_bytes = MAX_GPU_INSTANCES * std::mem::size_of::<SdfPrimitiveInstance>();
         let buf_info = VkBufferCreateInfo {
             s_type: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             p_next: ptr::null(),
             flags: 0,
             size: buffer_cap_bytes as VkDeviceSize,
-            usage: VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            usage: VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             sharing_mode: 0,
             queue_family_index_count: 0,
             p_queue_family_indices: ptr::null(),
@@ -2029,6 +2090,103 @@ impl VulkanRenderer {
                 == VK_SUCCESS
             {
                 let _ = (fns.vkBindBufferMemory)(device, instance_buffer, instance_memory, 0);
+            }
+        }
+
+        // Allocate a real Vulkan host-visible Vertex Buffer (4 GpuQuadVertex per instance = 1 MB)
+        let vertex_buffer_capacity = MAX_GPU_INSTANCES * 4 * std::mem::size_of::<GpuQuadVertex>();
+        let vbuf_info = VkBufferCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: 0,
+            size: vertex_buffer_capacity as VkDeviceSize,
+            usage: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            sharing_mode: 0,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+        };
+        let mut vertex_buffer: VkBuffer = 0;
+        let mut vertex_memory: VkDeviceMemory = 0;
+        if (fns.vkCreateBuffer)(device, &vbuf_info, ptr::null(), &mut vertex_buffer) == VK_SUCCESS {
+            let mut v_reqs: VkMemoryRequirements = std::mem::zeroed();
+            (fns.vkGetBufferMemoryRequirements)(device, vertex_buffer, &mut v_reqs);
+            let v_alloc = VkMemoryAllocateInfo {
+                s_type: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                p_next: ptr::null(),
+                allocation_size: v_reqs.size,
+                memory_type_index: Self::find_memory_type(
+                    &fns,
+                    phys,
+                    v_reqs.memory_type_bits,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                ),
+            };
+            if (fns.vkAllocateMemory)(device, &v_alloc, ptr::null(), &mut vertex_memory)
+                == VK_SUCCESS
+            {
+                let _ = (fns.vkBindBufferMemory)(device, vertex_buffer, vertex_memory, 0);
+            }
+        }
+
+        // Allocate & pre-populate a real Vulkan Index Buffer (6 u32 triangle indices per quad = 384 KB)
+        let index_buffer_capacity = MAX_GPU_INSTANCES * 6 * std::mem::size_of::<u32>();
+        let ibuf_info = VkBufferCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: 0,
+            size: index_buffer_capacity as VkDeviceSize,
+            usage: VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            sharing_mode: 0,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+        };
+        let mut index_buffer: VkBuffer = 0;
+        let mut index_memory: VkDeviceMemory = 0;
+        if (fns.vkCreateBuffer)(device, &ibuf_info, ptr::null(), &mut index_buffer) == VK_SUCCESS {
+            let mut i_reqs: VkMemoryRequirements = std::mem::zeroed();
+            (fns.vkGetBufferMemoryRequirements)(device, index_buffer, &mut i_reqs);
+            let i_alloc = VkMemoryAllocateInfo {
+                s_type: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                p_next: ptr::null(),
+                allocation_size: i_reqs.size,
+                memory_type_index: Self::find_memory_type(
+                    &fns,
+                    phys,
+                    i_reqs.memory_type_bits,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                ),
+            };
+            if (fns.vkAllocateMemory)(device, &i_alloc, ptr::null(), &mut index_memory)
+                == VK_SUCCESS
+            {
+                let _ = (fns.vkBindBufferMemory)(device, index_buffer, index_memory, 0);
+                let mut mapped_idx: *mut c_void = ptr::null_mut();
+                if (fns.vkMapMemory)(
+                    device,
+                    index_memory,
+                    0,
+                    index_buffer_capacity as VkDeviceSize,
+                    0,
+                    &mut mapped_idx,
+                ) == VK_SUCCESS
+                    && !mapped_idx.is_null()
+                {
+                    let idx_slice = std::slice::from_raw_parts_mut(
+                        mapped_idx as *mut u32,
+                        MAX_GPU_INSTANCES * 6,
+                    );
+                    for i in 0..MAX_GPU_INSTANCES {
+                        let base_v = (i * 4) as u32;
+                        let base_i = i * 6;
+                        idx_slice[base_i] = base_v;
+                        idx_slice[base_i + 1] = base_v + 1;
+                        idx_slice[base_i + 2] = base_v + 2;
+                        idx_slice[base_i + 3] = base_v;
+                        idx_slice[base_i + 4] = base_v + 2;
+                        idx_slice[base_i + 5] = base_v + 3;
+                    }
+                    (fns.vkUnmapMemory)(device, index_memory);
+                }
             }
         }
 
@@ -2328,6 +2486,12 @@ impl VulkanRenderer {
             instance_buffer,
             instance_memory,
             instance_buffer_capacity: buffer_cap_bytes,
+            vertex_buffer,
+            vertex_memory,
+            vertex_buffer_capacity,
+            index_buffer,
+            index_memory,
+            index_buffer_capacity,
             command_pool,
             command_buffer,
             query_pool,
@@ -2783,8 +2947,171 @@ impl VulkanRenderer {
         !self.swapchain_fbs.is_empty() && self.swapchain_pipeline != 0
     }
 
+    #[inline]
+    fn compute_instance_quad_bounds(inst: &SdfPrimitiveInstance) -> ([f32; 2], [f32; 2]) {
+        let raw_mat = (inst.params[3] + 0.5) as u32;
+        let mat = raw_mat % 100;
+        let border_fx = raw_mat / 100;
+        if mat == 14 {
+            let c_min_x = inst.clip_rect[0];
+            let c_min_y = inst.clip_rect[1];
+            let c_max_x = inst.clip_rect[0] + inst.clip_rect[2];
+            let c_max_y = inst.clip_rect[1] + inst.clip_rect[3];
+            let q_min_x = inst.rect[0].max(c_min_x);
+            let q_min_y = inst.rect[1].max(c_min_y);
+            let q_max_x = (inst.rect[0] + inst.rect[2]).min(c_max_x);
+            let q_max_y = (inst.rect[1] + inst.rect[3]).min(c_max_y);
+            ([q_min_x, q_min_y], [q_max_x, q_max_y])
+        } else {
+            let mut halo = inst.params[1] * 2.5 + inst.params[0] + 3.0;
+            if border_fx != 0 || mat == 2 || mat == 5 || mat == 7 || mat == 10 {
+                halo = halo.max(32.0);
+            }
+            let q_min_x = inst.rect[0] - halo;
+            let q_min_y = inst.rect[1] - halo;
+            let q_max_x = inst.rect[0] + inst.rect[2] + halo;
+            let q_max_y = inst.rect[1] + inst.rect[3] + halo;
+
+            let mut c_min_x = inst.clip_rect[0];
+            let mut c_min_y = inst.clip_rect[1];
+            let mut c_max_x = inst.clip_rect[0] + inst.clip_rect[2];
+            let mut c_max_y = inst.clip_rect[1] + inst.clip_rect[3];
+            let clip_is_self = (inst.clip_rect[0] - inst.rect[0]).abs() < 1.0
+                && (inst.clip_rect[1] - inst.rect[1]).abs() < 1.0
+                && (inst.clip_rect[2] - inst.rect[2]).abs() < 1.0
+                && (inst.clip_rect[3] - inst.rect[3]).abs() < 1.0;
+            if clip_is_self && (border_fx != 0 || mat == 2 || mat == 5 || mat == 7 || mat == 10) {
+                c_min_x -= 32.0;
+                c_min_y -= 32.0;
+                c_max_x += 32.0;
+                c_max_y += 32.0;
+            }
+            (
+                [q_min_x.max(c_min_x), q_min_y.max(c_min_y)],
+                [q_max_x.min(c_max_x), q_max_y.min(c_max_y)],
+            )
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    unsafe fn upload_instances_and_vertices(
+        &self,
+        fns: &VulkanFnTable,
+        instances: &[SdfPrimitiveInstance],
+    ) -> u32 {
+        let count = instances.len().min(MAX_GPU_INSTANCES);
+        if count == 0 {
+            return 0;
+        }
+        let inst_bytes = count * std::mem::size_of::<SdfPrimitiveInstance>();
+        if self.instance_memory != 0 {
+            let mut mapped: *mut c_void = ptr::null_mut();
+            if (fns.vkMapMemory)(
+                self.device,
+                self.instance_memory,
+                0,
+                inst_bytes as VkDeviceSize,
+                0,
+                &mut mapped,
+            ) == VK_SUCCESS
+                && !mapped.is_null()
+            {
+                ptr::copy_nonoverlapping(
+                    instances.as_ptr() as *const u8,
+                    mapped as *mut u8,
+                    inst_bytes,
+                );
+                (fns.vkUnmapMemory)(self.device, self.instance_memory);
+            }
+        }
+        let vert_bytes = count * 4 * std::mem::size_of::<GpuQuadVertex>();
+        if self.vertex_memory != 0 {
+            let mut mapped_v: *mut c_void = ptr::null_mut();
+            if (fns.vkMapMemory)(
+                self.device,
+                self.vertex_memory,
+                0,
+                vert_bytes as VkDeviceSize,
+                0,
+                &mut mapped_v,
+            ) == VK_SUCCESS
+                && !mapped_v.is_null()
+            {
+                let v_slice =
+                    std::slice::from_raw_parts_mut(mapped_v as *mut GpuQuadVertex, count * 4);
+                for (i, inst) in instances[..count].iter().enumerate() {
+                    let (q_min, q_max) = Self::compute_instance_quad_bounds(inst);
+                    let base = i * 4;
+                    v_slice[base] = GpuQuadVertex {
+                        pos_px: [q_min[0], q_min[1]],
+                        uv: [0.0, 0.0],
+                    };
+                    v_slice[base + 1] = GpuQuadVertex {
+                        pos_px: [q_max[0], q_min[1]],
+                        uv: [1.0, 0.0],
+                    };
+                    v_slice[base + 2] = GpuQuadVertex {
+                        pos_px: [q_max[0], q_max[1]],
+                        uv: [1.0, 1.0],
+                    };
+                    v_slice[base + 3] = GpuQuadVertex {
+                        pos_px: [q_min[0], q_max[1]],
+                        uv: [0.0, 1.0],
+                    };
+                }
+                (fns.vkUnmapMemory)(self.device, self.vertex_memory);
+            }
+        }
+        count as u32
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    unsafe fn record_indexed_draws(
+        &self,
+        fns: &VulkanFnTable,
+        cb: VkCommandBuffer,
+        instances: &[SdfPrimitiveInstance],
+        draw_instances: u32,
+    ) -> usize {
+        if draw_instances == 0 || self.vertex_buffer == 0 || self.index_buffer == 0 {
+            return 0;
+        }
+        let vb_offset: VkDeviceSize = 0;
+        (fns.vkCmdBindVertexBuffers)(cb, 0, 1, &self.vertex_buffer, &vb_offset);
+        (fns.vkCmdBindIndexBuffer)(cb, self.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+
+        let mut draw_calls = 0_usize;
+        let mut idx = 0_usize;
+        let count = draw_instances as usize;
+        while idx < count {
+            let raw_mat = (instances[idx].params[3] + 0.5) as u32;
+            let mat = raw_mat % 100;
+            if mat == 14 {
+                // Group contiguous glyph quads (a single text label) into one vkCmdDrawIndexed mesh draw
+                let start = idx;
+                idx += 1;
+                while idx < count {
+                    let next_mat = ((instances[idx].params[3] + 0.5) as u32) % 100;
+                    if next_mat != 14 {
+                        break;
+                    }
+                    idx += 1;
+                }
+                let run_len = (idx - start) as u32;
+                (fns.vkCmdDrawIndexed)(cb, run_len * 6, 1, (start as u32) * 6, 0, 0);
+                draw_calls += 1;
+            } else {
+                // Draw each UI widget / card / shader / border primitive as its own indexed quad mesh
+                (fns.vkCmdDrawIndexed)(cb, 6, 1, (idx as u32) * 6, 0, 0);
+                draw_calls += 1;
+                idx += 1;
+            }
+        }
+        draw_calls
+    }
+
     /// Executes the hardware Vulkan graphics pipeline directly onto the attached `VkSwapchainKHR`
-    /// (`vkAcquireNextImageKHR` -> `vkCmdBeginRenderPass` -> `vkCmdDraw` -> `vkQueueSubmit` -> `vkQueuePresentKHR`).
+    /// (`vkAcquireNextImageKHR` -> `vkCmdBeginRenderPass` -> `vkCmdDrawIndexed` -> `vkQueueSubmit` -> `vkQueuePresentKHR`).
     pub fn render_and_present(
         &mut self,
         instances: &[SdfPrimitiveInstance],
@@ -2799,10 +3126,7 @@ impl VulkanRenderer {
             if !self.hardware_active || self.surface == 0 || self.device.is_null() {
                 return None;
             }
-            if self.swapchain == 0
-                || self.swapchain_extent != (width.max(1), height.max(1))
-                || self.swapchain_fbs.is_empty()
-            {
+            if self.swapchain == 0 || self.swapchain_fbs.is_empty() {
                 if !self.recreate_swapchain(width.max(1), height.max(1)) {
                     return None;
                 }
@@ -2835,31 +3159,8 @@ impl VulkanRenderer {
 
             let _ = (fns.vkResetFences)(self.device, 1, &self.in_flight_fence);
 
-            // Upload instances to GPU SSBO
-            let byte_len = (instances.len() * std::mem::size_of::<SdfPrimitiveInstance>())
-                .min(self.instance_buffer_capacity);
-            let draw_instances =
-                (byte_len / std::mem::size_of::<SdfPrimitiveInstance>()) as u32;
-            if byte_len > 0 && self.instance_memory != 0 {
-                let mut mapped: *mut c_void = ptr::null_mut();
-                if (fns.vkMapMemory)(
-                    self.device,
-                    self.instance_memory,
-                    0,
-                    byte_len as VkDeviceSize,
-                    0,
-                    &mut mapped,
-                ) == VK_SUCCESS
-                    && !mapped.is_null()
-                {
-                    ptr::copy_nonoverlapping(
-                        instances.as_ptr() as *const u8,
-                        mapped as *mut u8,
-                        byte_len,
-                    );
-                    (fns.vkUnmapMemory)(self.device, self.instance_memory);
-                }
-            }
+            // Upload instances to GPU SSBO & expanded 2D quad vertices to GPU Vertex Buffer
+            let draw_instances = self.upload_instances_and_vertices(fns, instances);
 
             let (sc_w, sc_h) = self.swapchain_extent;
             let fb = *self.swapchain_fbs.get(img_idx as usize)?;
@@ -2950,9 +3251,7 @@ impl VulkanRenderer {
                 std::mem::size_of::<SdfPushConstants>() as u32,
                 &pc as *const _ as *const c_void,
             );
-            if draw_instances > 0 {
-                (fns.vkCmdDraw)(cb, 6, draw_instances, 0, 0);
-            }
+            let draw_calls = self.record_indexed_draws(fns, cb, instances, draw_instances);
             (fns.vkCmdEndRenderPass)(cb);
 
             if self.query_pool != 0 {
@@ -3022,9 +3321,12 @@ impl VulkanRenderer {
                 device_name: self.device_name.clone(),
                 hardware_vulkan_active: true,
                 instance_count: instances.len(),
-                draw_calls: if draw_instances > 0 { 1 } else { 0 },
+                draw_calls,
                 gpu_timestamp_us,
-                vram_allocated_bytes: self.instance_buffer_capacity + texture_bytes,
+                vram_allocated_bytes: self.instance_buffer_capacity
+                    + self.vertex_buffer_capacity
+                    + self.index_buffer_capacity
+                    + texture_bytes,
                 non_zero_pixels: (sc_w * sc_h) as usize,
             });
         }
@@ -3238,31 +3540,7 @@ impl VulkanRenderer {
             unsafe {
                 if self.ensure_offscreen_target(width, height) {
                     if let Some(fns) = &self.fns {
-                        let byte_len = (instances.len()
-                            * std::mem::size_of::<SdfPrimitiveInstance>())
-                        .min(self.instance_buffer_capacity);
-                        let draw_instances =
-                            (byte_len / std::mem::size_of::<SdfPrimitiveInstance>()) as u32;
-                        if byte_len > 0 && self.instance_memory != 0 {
-                            let mut mapped: *mut c_void = ptr::null_mut();
-                            if (fns.vkMapMemory)(
-                                self.device,
-                                self.instance_memory,
-                                0,
-                                byte_len as VkDeviceSize,
-                                0,
-                                &mut mapped,
-                            ) == VK_SUCCESS
-                                && !mapped.is_null()
-                            {
-                                ptr::copy_nonoverlapping(
-                                    instances.as_ptr() as *const u8,
-                                    mapped as *mut u8,
-                                    byte_len,
-                                );
-                                (fns.vkUnmapMemory)(self.device, self.instance_memory);
-                            }
-                        }
+                        let draw_instances = self.upload_instances_and_vertices(fns, instances);
 
                         let cb = self.command_buffer;
                         let _ = (fns.vkResetCommandBuffer)(cb, 0);
@@ -3342,9 +3620,8 @@ impl VulkanRenderer {
                                 std::mem::size_of::<SdfPushConstants>() as u32,
                                 &pc as *const _ as *const c_void,
                             );
-                            if draw_instances > 0 {
-                                (fns.vkCmdDraw)(cb, 6, draw_instances, 0, 0);
-                            }
+                            let draw_calls =
+                                self.record_indexed_draws(fns, cb, instances, draw_instances);
                             (fns.vkCmdEndRenderPass)(cb);
 
                             let copy_region = VkBufferImageCopy {
@@ -3442,9 +3719,11 @@ impl VulkanRenderer {
                                     device_name: self.device_name.clone(),
                                     hardware_vulkan_active: true,
                                     instance_count: instances.len(),
-                                    draw_calls: if draw_instances > 0 { 1 } else { 0 },
+                                    draw_calls,
                                     gpu_timestamp_us,
                                     vram_allocated_bytes: self.instance_buffer_capacity
+                                        + self.vertex_buffer_capacity
+                                        + self.index_buffer_capacity
                                         + texture_bytes
                                         + copy_bytes,
                                     non_zero_pixels: total_pixels,
@@ -4389,6 +4668,18 @@ impl Drop for VulkanRenderer {
                     }
                     if self.instance_memory != 0 {
                         (fns.vkFreeMemory)(self.device, self.instance_memory, ptr::null());
+                    }
+                    if self.vertex_buffer != 0 {
+                        (fns.vkDestroyBuffer)(self.device, self.vertex_buffer, ptr::null());
+                    }
+                    if self.vertex_memory != 0 {
+                        (fns.vkFreeMemory)(self.device, self.vertex_memory, ptr::null());
+                    }
+                    if self.index_buffer != 0 {
+                        (fns.vkDestroyBuffer)(self.device, self.index_buffer, ptr::null());
+                    }
+                    if self.index_memory != 0 {
+                        (fns.vkFreeMemory)(self.device, self.index_memory, ptr::null());
                     }
                     (fns.vkDestroyDevice)(self.device, ptr::null());
                     if !self.instance.is_null() {

@@ -29,14 +29,7 @@ mkdir -p "${DIST_DIR}/include" \
          "${DIST_DIR}/pkgconfig" \
          "${DIST_DIR}/cmake"
 
-# 1. Build Linux x86_64 release libraries (.so and .a)
-echo "[*] Building Linux x86_64 release libraries (libiguanodon_ffi.so & libiguanodon_ffi.a)..."
-cd "${ROOT_DIR}"
-cargo build --release -p iguanodon-ffi
-cp "${ROOT_DIR}/target/release/libiguanodon_ffi.so" "${DIST_DIR}/native/linux-x86_64/libiguanodon_ffi.so"
-cp "${ROOT_DIR}/target/release/libiguanodon_ffi.a" "${DIST_DIR}/native/linux-x86_64/libiguanodon_ffi.a"
-
-# 2. Cross-compile & copy Android arm64-v8a (and x86_64) release libraries if NDK is available
+# 1. Discover Android NDK & glslc if available, and recompile SPIR-V shaders
 NDK_DIR=""
 for sdk_cand in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "${HOME}/Android/Sdk" "/opt/android-sdk"; do
     if [[ -n "${sdk_cand}" && -d "${sdk_cand}/ndk" ]]; then
@@ -44,6 +37,27 @@ for sdk_cand in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "${HOME}/Android/Sdk
         break
     fi
 done
+
+GLSLC_BIN="$(command -v glslc || true)"
+if [[ -z "${GLSLC_BIN}" && -n "${NDK_DIR}" && -x "${NDK_DIR}/shader-tools/linux-x86_64/glslc" ]]; then
+    GLSLC_BIN="${NDK_DIR}/shader-tools/linux-x86_64/glslc"
+fi
+if [[ -n "${GLSLC_BIN}" ]]; then
+    echo "[*] Compiling GLSL 450 Vulkan shaders with ${GLSLC_BIN}..."
+    "${GLSLC_BIN}" "${ROOT_DIR}/crates/iguanodon-shaders/shaders/sdf_uber.vert" \
+        -o "${ROOT_DIR}/crates/iguanodon-shaders/shaders/sdf_uber.vert.spv"
+    "${GLSLC_BIN}" "${ROOT_DIR}/crates/iguanodon-shaders/shaders/sdf_uber.frag" \
+        -o "${ROOT_DIR}/crates/iguanodon-shaders/shaders/sdf_uber.frag.spv"
+fi
+
+# 2. Build Linux x86_64 release libraries (.so and .a)
+echo "[*] Building Linux x86_64 release libraries (libiguanodon_ffi.so & libiguanodon_ffi.a)..."
+cd "${ROOT_DIR}"
+cargo build --release -p iguanodon-ffi
+cp "${ROOT_DIR}/target/release/libiguanodon_ffi.so" "${DIST_DIR}/native/linux-x86_64/libiguanodon_ffi.so"
+cp "${ROOT_DIR}/target/release/libiguanodon_ffi.a" "${DIST_DIR}/native/linux-x86_64/libiguanodon_ffi.a"
+
+# 3. Cross-compile & copy Android arm64-v8a (and x86_64) release libraries if NDK is available
 if [[ -n "${NDK_DIR}" && -d "${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin" ]]; then
     TOOLCHAIN_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
     echo "[*] Cross-compiling Android arm64-v8a & x86_64 libiguanodon_ffi.so with NDK (${NDK_DIR})..."

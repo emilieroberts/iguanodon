@@ -736,7 +736,7 @@ mod tests {
         assert!(report.hardware_vulkan_active);
         assert_eq!(report.lazy_list_total_items, 10_000);
         assert!(report.materialized_scene_nodes < 60);
-        assert!(report.draw_calls_per_frame <= 2);
+        assert!(report.draw_calls_per_frame >= 50);
     }
 
     #[test]

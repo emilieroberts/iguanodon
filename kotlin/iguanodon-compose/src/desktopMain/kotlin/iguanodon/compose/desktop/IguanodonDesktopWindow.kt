@@ -32,6 +32,8 @@ import java.awt.event.MouseMotionAdapter
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.awt.image.BufferedImage
+import java.io.File
+import javax.imageio.ImageIO
 import javax.swing.JFrame
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
@@ -131,6 +133,19 @@ class IguanodonDesktopWindow(
         frameTimer.start()
 
         val frame = JFrame(title)
+        try {
+            val iconStream = IguanodonDesktopWindow::class.java.getResourceAsStream("/iguanodon_icon.png")
+            val iconImg = if (iconStream != null) {
+                iconStream.use { ImageIO.read(it) }
+            } else {
+                val f = File("assets/iguanodon_icon_256.png")
+                if (f.exists()) ImageIO.read(f) else null
+            }
+            if (iconImg != null) {
+                frame.iconImage = iconImg
+            }
+        } catch (_: Throwable) {
+        }
         frame.defaultCloseOperation = JFrame.EXIT_ON_CLOSE
         frame.addWindowListener(object : WindowAdapter() {
             override fun windowClosing(e: WindowEvent?) {
