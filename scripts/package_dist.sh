@@ -64,6 +64,7 @@ fi
 ANDROID_SO="${ROOT_DIR}/target/aarch64-linux-android/release/libiguanodon_ffi.so"
 if [[ -f "${ANDROID_SO}" ]]; then
     cp "${ANDROID_SO}" "${DIST_DIR}/native/android-arm64-v8a/libiguanodon_ffi.so"
+    mkdir -p "${ROOT_DIR}/kotlin/android-benchmark-app/src/main/jniLibs/arm64-v8a"
     cp "${ANDROID_SO}" "${ROOT_DIR}/kotlin/android-benchmark-app/src/main/jniLibs/arm64-v8a/libiguanodon_ffi.so" 2>/dev/null || true
     echo "[+] Included Android arm64-v8a libiguanodon_ffi.so"
 fi
@@ -71,6 +72,8 @@ ANDROID_X64_SO="${ROOT_DIR}/target/x86_64-linux-android/release/libiguanodon_ffi
 if [[ -f "${ANDROID_X64_SO}" ]]; then
     mkdir -p "${DIST_DIR}/native/android-x86_64"
     cp "${ANDROID_X64_SO}" "${DIST_DIR}/native/android-x86_64/libiguanodon_ffi.so"
+    mkdir -p "${ROOT_DIR}/kotlin/android-benchmark-app/src/main/jniLibs/x86_64"
+    cp "${ANDROID_X64_SO}" "${ROOT_DIR}/kotlin/android-benchmark-app/src/main/jniLibs/x86_64/libiguanodon_ffi.so" 2>/dev/null || true
     echo "[+] Included Android x86_64 libiguanodon_ffi.so"
 fi
 
@@ -173,6 +176,25 @@ void iguanodon_key_char(IguanodonEngine* engine_ptr, uint32_t unicode_codepoint)
 void iguanodon_key_backspace(IguanodonEngine* engine_ptr);
 
 float iguanodon_render_frame(IguanodonEngine* engine_ptr, float dt_sec);
+bool  iguanodon_attach_android_surface(
+    IguanodonEngine* engine_ptr,
+    void* anative_window,
+    uint32_t width,
+    uint32_t height
+);
+bool  iguanodon_attach_xlib_surface(
+    IguanodonEngine* engine_ptr,
+    void* dpy,
+    uint64_t window,
+    uint32_t width,
+    uint32_t height
+);
+float iguanodon_render_and_present(
+    IguanodonEngine* engine_ptr,
+    float dt_sec,
+    uint32_t width,
+    uint32_t height
+);
 float iguanodon_render_frame_rgba(
     IguanodonEngine* engine_ptr,
     float dt_sec,

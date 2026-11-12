@@ -235,11 +235,24 @@ pub struct RasterizedGlyph {
     pub coverage: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct GlyphQuadPlacement {
+    pub rect: [f32; 4],
+    pub uv_rect: [f32; 4],
+}
+
 pub struct CachedFontSet {
     pub font_path: String,
     pub body_18px: Vec<Option<RasterizedGlyph>>,
     pub title_22px: Vec<Option<RasterizedGlyph>>,
+    pub atlas_width: u32,
+    pub atlas_height: u32,
+    pub atlas_rgba8: Vec<u8>,
+    pub body_uvs: [[f32; 4]; 128],
+    pub title_uvs: [[f32; 4]; 128],
 }
+
+const EMBEDDED_TTF: &[u8] = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
 
 impl CachedFontSet {
     pub fn global() -> &'static Self {
@@ -248,20 +261,140 @@ impl CachedFontSet {
             for &path in ROBOTO_FONT_PATHS {
                 if let Ok(bytes) = fs::read(path) {
                     if let Some((body_18px, title_22px)) = Self::load_from_ttf(&bytes) {
-                        return Self {
-                            font_path: path.to_string(),
-                            body_18px,
-                            title_22px,
-                        };
+                        return Self::pack_gpu_atlas(path.to_string(), body_18px, title_22px);
                     }
                 }
             }
-            Self {
-                font_path: "Built-in Scaled Sans Fallback".to_string(),
-                body_18px: vec![None; 128],
-                title_22px: vec![None; 128],
+            if let Some((body_18px, title_22px)) = Self::load_from_ttf(EMBEDDED_TTF) {
+                return Self::pack_gpu_atlas(
+                    "Embedded Roboto/NotoSans TTF".to_string(),
+                    body_18px,
+                    title_22px,
+                );
             }
+            Self::pack_gpu_atlas(
+                "Built-in Scaled Sans Fallback".to_string(),
+                vec![None; 128],
+                vec![None; 128],
+            )
         })
+    }
+
+    fn pack_gpu_atlas(
+        font_path: String,
+        body_18px: Vec<Option<RasterizedGlyph>>,
+        title_22px: Vec<Option<RasterizedGlyph>>,
+    ) -> Self {
+        let atlas_width = 512_u32;
+        let atlas_height = 512_u32;
+        let mut atlas_rgba8 = vec![0_u8; (atlas_width * atlas_height * 4) as usize];
+        let mut body_uvs = [[0.0_f32; 4]; 128];
+        let mut title_uvs = [[0.0_f32; 4]; 128];
+
+        let mut pen_x = 2_u32;
+        let mut pen_y = 2_u32;
+        let mut row_h = 0_u32;
+
+        let mut pack_one = |g: &RasterizedGlyph| -> [f32; 4] {
+            if g.width == 0 || g.height == 0 {
+                return [0.0; 4];
+            }
+            if pen_x + g.width + 2 > atlas_width {
+                pen_x = 2;
+                pen_y += row_h + 2;
+                row_h = 0;
+            }
+            if pen_y + g.height + 2 > atlas_height {
+                return [0.0; 4];
+            }
+            for gy in 0..g.height {
+                for gx in 0..g.width {
+                    let cov = g.coverage[(gy * g.width + gx) as usize];
+                    let dst = (((pen_y + gy) * atlas_width + (pen_x + gx)) * 4) as usize;
+                    atlas_rgba8[dst] = cov;
+                    atlas_rgba8[dst + 1] = cov;
+                    atlas_rgba8[dst + 2] = cov;
+                    atlas_rgba8[dst + 3] = cov;
+                }
+            }
+            let u0 = pen_x as f32 / atlas_width as f32;
+            let v0 = pen_y as f32 / atlas_height as f32;
+            let u1 = (pen_x + g.width) as f32 / atlas_width as f32;
+            let v1 = (pen_y + g.height) as f32 / atlas_height as f32;
+            pen_x += g.width + 2;
+            row_h = row_h.max(g.height);
+            [u0, v0, u1, v1]
+        };
+
+        for (code, slot) in body_18px.iter().enumerate().take(128) {
+            if let Some(g) = slot {
+                body_uvs[code] = pack_one(g);
+            }
+        }
+        for (code, slot) in title_22px.iter().enumerate().take(128) {
+            if let Some(g) = slot {
+                title_uvs[code] = pack_one(g);
+            }
+        }
+
+        Self {
+            font_path,
+            body_18px,
+            title_22px,
+            atlas_width,
+            atlas_height,
+            atlas_rgba8,
+            body_uvs,
+            title_uvs,
+        }
+    }
+
+    /// Computes screen-space glyph quad rectangles and GPU atlas UVs for `text` so the
+    /// Vulkan instanced SDF pipeline can draw all typography directly on the GPU.
+    pub fn layout_glyph_quads(
+        &self,
+        pos: Point,
+        text: &str,
+        clip: Rect,
+        is_headline: bool,
+        out: &mut Vec<GlyphQuadPlacement>,
+    ) {
+        let table = if is_headline {
+            &self.title_22px
+        } else {
+            &self.body_18px
+        };
+        let uvs = if is_headline {
+            &self.title_uvs
+        } else {
+            &self.body_uvs
+        };
+        let mut pen_x = pos.x.round() as i32;
+        let pen_y = pos.y.round() as i32;
+        let clip_x1 = (clip.x + clip.width).ceil() as i32;
+
+        for ch in text.chars() {
+            let code = (ch as usize).min(127);
+            if let Some(Some(glyph)) = table.get(code) {
+                if pen_x + glyph.advance_px > clip_x1 - 2 {
+                    break;
+                }
+                if glyph.width > 0 && glyph.height > 0 {
+                    let gx0 = (pen_x + glyph.bearing_x) as f32;
+                    let gy0 = (pen_y + glyph.bearing_y) as f32;
+                    let uv = uvs[code];
+                    if uv[2] > uv[0] && uv[3] > uv[1] {
+                        out.push(GlyphQuadPlacement {
+                            rect: [gx0, gy0, glyph.width as f32, glyph.height as f32],
+                            uv_rect: uv,
+                        });
+                    }
+                }
+                pen_x += glyph.advance_px;
+            } else {
+                pen_x += 10;
+            }
+        }
     }
 
     fn load_from_ttf(

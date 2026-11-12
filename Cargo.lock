@@ -69,6 +69,7 @@ version = "0.0.1-alpha"
 dependencies = [
  "iguanodon-core",
  "iguanodon-shaders",
+ "iguanodon-text",
 ]
 
 [[package]]

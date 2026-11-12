@@ -54,6 +54,7 @@ class IguanodonDesktopWindow(
     private var bufferedImage = BufferedImage(1180, 760, BufferedImage.TYPE_INT_ARGB)
     private var argbInts = IntArray(1180 * 760)
     private var lastFrameNanos = System.nanoTime()
+    private var lastInputNanos = System.nanoTime()
 
     init {
         preferredSize = Dimension(1180, 760)
@@ -63,12 +64,14 @@ class IguanodonDesktopWindow(
 
         addMouseListener(object : MouseAdapter() {
             override fun mousePressed(e: MouseEvent) {
+                lastInputNanos = System.nanoTime()
                 requestFocusInWindow()
                 val isRight = SwingUtilities.isRightMouseButton(e)
                 session.onPointerDown(e.x.toFloat(), e.y.toFloat(), isRight)
             }
 
             override fun mouseReleased(e: MouseEvent) {
+                lastInputNanos = System.nanoTime()
                 if (SwingUtilities.isLeftMouseButton(e)) {
                     session.onPointerUp(e.x.toFloat(), e.y.toFloat())
                 }
@@ -77,20 +80,24 @@ class IguanodonDesktopWindow(
 
         addMouseMotionListener(object : MouseMotionAdapter() {
             override fun mouseMoved(e: MouseEvent) {
+                lastInputNanos = System.nanoTime()
                 session.onPointerMove(e.x.toFloat(), e.y.toFloat())
             }
 
             override fun mouseDragged(e: MouseEvent) {
+                lastInputNanos = System.nanoTime()
                 session.onPointerMove(e.x.toFloat(), e.y.toFloat())
             }
         })
 
         addMouseWheelListener { e ->
+            lastInputNanos = System.nanoTime()
             session.onScroll(e.x.toFloat(), e.y.toFloat(), (e.preciseWheelRotation * 48.0).toFloat())
         }
 
         addKeyListener(object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) {
+                lastInputNanos = System.nanoTime()
                 if (e.keyCode == KeyEvent.VK_BACK_SPACE) {
                     session.onBackspace()
                 } else if (e.keyChar.code in 32..126) {
@@ -101,11 +108,18 @@ class IguanodonDesktopWindow(
 
         var frameTimer: Timer? = null
         frameTimer = Timer(8) {
-            val targetDelay = session.targetFrameIntervalMs
+            val now = System.nanoTime()
+            val isActivelyInteracting = (now - lastInputNanos) < 300_000_000L
+            val targetDelay = if (isActivelyInteracting) {
+                session.targetFrameIntervalMs
+            } else {
+                session.targetFrameIntervalMs.coerceAtLeast(42)
+            }
             if (frameTimer?.delay != targetDelay) {
                 frameTimer?.delay = targetDelay
             }
             if (width > 0 && height > 0 && (width != session.viewportWidth || height != session.viewportHeight)) {
+                lastInputNanos = now
                 session.resize(width, height)
                 val w = session.viewportWidth
                 val h = session.viewportHeight
@@ -113,7 +127,6 @@ class IguanodonDesktopWindow(
                 argbInts = IntArray(w * h)
                 bufferedImage = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
             }
-            val now = System.nanoTime()
             val dt = ((now - lastFrameNanos) / 1_000_000_000.0f).coerceIn(1f / 240f, 0.05f)
             lastFrameNanos = now
             compositionHost.doFrame(now)

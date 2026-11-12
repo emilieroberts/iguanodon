@@ -20,8 +20,8 @@
 //! and the deterministic **Headless UI Test Harness (`IguanodonTestHarness`)**.
 
 use iguanodon_core::{
-    ContextMenuItem, ContextMenuManager, DragDropManager, FrameSample, NodeId, PerfTelemetry,
-    Point, Rect, SpringSpec, SpringValue, TextEditState,
+    Color, ContextMenuItem, ContextMenuManager, DragDropManager, FrameSample, NodeId,
+    PerfTelemetry, Point, Rect, SpringSpec, SpringValue, TextEditState,
 };
 use iguanodon_layout::{
     Dimension, FlexDirection, LayoutEngine, LayoutStyle, LazyListLayout, ScrollbarMetrics,
@@ -30,10 +30,41 @@ use iguanodon_layout::{
 use iguanodon_shaders::{
     pack_material_and_border, BorderShaderEffect, ShaderMaterialId, SdfPrimitiveInstance,
 };
-use iguanodon_text::{draw_text_rgba, draw_text_sized_rgba, MultilineTextLayout};
+use iguanodon_text::{
+    draw_text_rgba, draw_text_sized_rgba, CachedFontSet, MultilineTextLayout,
+};
 use iguanodon_theme::{InteractionShaderKind, ThemeDescriptor, ThemeId, ThemeMode};
-use iguanodon_vk::VulkanRenderer;
+pub use iguanodon_vk::{GpuImageTexture, VulkanRenderer};
 use std::time::Instant;
+
+/// Emits GPU glyph atlas quad instances (`ShaderMaterialId::GlyphAtlas`) for `text` at `pos`
+/// clipped to `clip`.
+pub fn push_gpu_text_glyphs(
+    out: &mut Vec<SdfPrimitiveInstance>,
+    pos: Point,
+    text: &str,
+    color: Color,
+    clip: Rect,
+    is_headline: bool,
+) {
+    let col = color.to_array();
+    let clip_arr = clip.to_array();
+    let mat = ShaderMaterialId::GlyphAtlas as u32 as f32;
+    let mut quads = Vec::with_capacity(text.len());
+    CachedFontSet::global().layout_glyph_quads(pos, text, clip, is_headline, &mut quads);
+    for q in quads {
+        out.push(SdfPrimitiveInstance {
+            rect: q.rect,
+            corner_radii: q.uv_rect,
+            clip_rect: clip_arr,
+            fill_color_start: col,
+            fill_color_end: col,
+            border_color: [0.0; 4],
+            shadow_color: [0.0; 4],
+            params: [0.0, 0.0, 2.0, mat],
+        });
+    }
+}
 
 pub mod catalog;
 pub use catalog::*;
@@ -1118,6 +1149,21 @@ impl StandardBenchmarkApp {
         self.anim_card_corner_spring.step(dt);
     }
 
+    /// Returns `true` if any spatial/effects spring is currently in flight or a drag gesture is active.
+    pub fn has_active_spring_or_drag(&self) -> bool {
+        !self.theme_transition.is_settled()
+            || !self.button_press_spring.is_settled()
+            || !self.button_jello_spring.is_settled()
+            || !self.shader_btn_jello_spring.is_settled()
+            || !self.scrollable_text_overscroll_spring.is_settled()
+            || !self.lazy_overscroll_spring.is_settled()
+            || !self.progress_spring.is_settled()
+            || !self.drop_target_glow_spring.is_settled()
+            || !self.anim_card_scale_spring.is_settled()
+            || !self.anim_card_corner_spring.is_settled()
+            || self.drag_drop.active_drag.is_some()
+    }
+
     /// Computes volume-preserving jello squash-and-stretch bounds (`[x, y, width, height]`)
     /// from an underdamped spring displacement (`jello_val`).
     #[inline]
@@ -1883,6 +1929,421 @@ impl StandardBenchmarkApp {
         out
     }
 
+    /// Builds the complete GPU instance stream for hardware Vulkan rendering:
+    /// 1. Fullscreen background (`ElectricJellyfish` or `StandardSdf`)
+    /// 2. Base widget `SdfPrimitiveInstance`s
+    /// 3. Base widget `GlyphAtlas` typography quads
+    /// 4. Top-layer overlay `SdfPrimitiveInstance`s (context menu + drag ghost)
+    /// 5. Top-layer overlay `GlyphAtlas` typography quads
+    /// Returns `(gpu_instances, materialized_widget_node_count)`.
+    pub fn build_complete_gpu_instances(&self) -> (Vec<SdfPrimitiveInstance>, usize) {
+        let base_widgets = self.build_sdf_instances();
+        let overlay_widgets = self.build_overlay_sdf_instances();
+        let materialized_nodes = base_widgets.len() + overlay_widgets.len();
+
+        let mut out = Vec::with_capacity(materialized_nodes + 384);
+        let bg_mat = if self.renderer_backend == RendererBackend::ComposeUi {
+            ShaderMaterialId::StandardSdf
+        } else {
+            ShaderMaterialId::ElectricJellyfish
+        };
+        let bg_col = self.current_theme.colors.background.to_array();
+        out.push(SdfPrimitiveInstance {
+            rect: [
+                0.0,
+                0.0,
+                self.viewport.width.max(1.0),
+                self.viewport.height.max(1.0),
+            ],
+            corner_radii: [0.0; 4],
+            clip_rect: [
+                0.0,
+                0.0,
+                self.viewport.width.max(1.0),
+                self.viewport.height.max(1.0),
+            ],
+            fill_color_start: bg_col,
+            fill_color_end: bg_col,
+            border_color: [0.0; 4],
+            shadow_color: [0.0; 4],
+            params: [0.0, 0.0, 2.0, bg_mat as u32 as f32],
+        });
+
+        out.extend_from_slice(&base_widgets);
+        self.append_text_glyph_instances(&mut out);
+
+        if !overlay_widgets.is_empty() {
+            out.extend_from_slice(&overlay_widgets);
+            self.append_overlay_text_glyph_instances(&mut out);
+        }
+
+        (out, materialized_nodes)
+    }
+
+    /// Appends GPU `GlyphAtlas` quad instances for all 11 components in the benchmark app.
+    pub fn append_text_glyph_instances(&self, out: &mut Vec<SdfPrimitiveInstance>) {
+        use bench_nodes::*;
+        if self.viewport.width < 320.0 || self.viewport.height < 200.0 {
+            return;
+        }
+        let th = &self.current_theme;
+        let on_surf = th.colors.on_surface;
+        let on_prim = th.colors.on_primary;
+        let accent = th.colors.accent_glow;
+
+        if let Some(r) = self.layout.bounds(HEADLINE_LABEL) {
+            let headline = if r.width < 240.0 {
+                "Iguanodon"
+            } else {
+                self.headline_text.as_str()
+            };
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 10.0, r.y + (r.height - 26.0) * 0.5),
+                headline,
+                on_surf,
+                r,
+                true,
+            );
+        }
+        if let Some(r) = self.layout.bounds(RENDERER_BTN) {
+            let label = if r.width < 130.0 {
+                self.renderer_backend.short_name().to_string()
+            } else {
+                format!("UI: {}", self.renderer_backend.name())
+            };
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 8.0, r.y + (r.height - 21.0) * 0.5),
+                &label,
+                accent,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(POWER_BTN) {
+            let label = if r.width < 110.0 {
+                format!("Pwr:{}", self.power_mode.short_name())
+            } else {
+                format!("Pwr: {}", self.power_mode.short_name())
+            };
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 8.0, r.y + (r.height - 21.0) * 0.5),
+                &label,
+                accent,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(THEME_BTN) {
+            let label = if r.width < 145.0 {
+                self.active_theme_id.short_name().to_string()
+            } else {
+                format!("Theme: {}", self.active_theme_id.short_name())
+            };
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 8.0, r.y + (r.height - 21.0) * 0.5),
+                &label,
+                accent,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(MODE_BTN) {
+            let label = if r.width < 110.0 {
+                self.active_theme_mode.name().to_string()
+            } else {
+                format!("Mode: {}", self.active_theme_mode.name())
+            };
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 8.0, r.y + (r.height - 21.0) * 0.5),
+                &label,
+                accent,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(PERF_OVERLAY) {
+            let perf_str = if r.width < 200.0 {
+                format!("{:.0} FPS", self.telemetry.avg_fps())
+            } else {
+                format!(
+                    "FPS:{:.0} 1%:{:.0} Nodes:{}/{}",
+                    self.telemetry.avg_fps(),
+                    self.telemetry.one_percent_low_fps(),
+                    self.telemetry.latest().materialized_nodes,
+                    self.lazy_total_items
+                )
+            };
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 8.0, r.y + (r.height - 21.0) * 0.5),
+                &perf_str,
+                accent,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(STATUS_LABEL) {
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 6.0, r.y + 4.0),
+                &self.status_label_text,
+                on_surf,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(PRIMARY_BTN) {
+            let txt = format!("Click Action Button (Clicks: {})", self.button_click_count);
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 14.0, r.y + (r.height - 21.0) * 0.5),
+                &txt,
+                on_prim,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(FIRE_SHADER_BTN) {
+            let txt = if self.fire_shader_enabled {
+                "SDF Fire Shader: ON [Click]"
+            } else {
+                "SDF Fire Shader: OFF [Click]"
+            };
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 14.0, r.y + (r.height - 21.0) * 0.5),
+                txt,
+                on_surf,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(EDIT_TEXT_FIELD) {
+            let display = if self.text_field.text.is_empty() {
+                &self.text_field.placeholder
+            } else {
+                &self.text_field.text
+            };
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 12.0, r.y + (r.height - 21.0) * 0.5),
+                display,
+                on_surf,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(PROGRESS_DETERMINATE) {
+            let pct = format!("Progress: {:.0}%", self.progress_spring.value * 100.0);
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 12.0, r.y + 2.0),
+                &pct,
+                on_surf,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(SHOWCASE_IMAGE) {
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 14.0, r.y + 14.0),
+                "Image + Ripple + Fire Border",
+                on_surf,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(ANIMATED_SHADER_CARD) {
+            let shader_label = format!(
+                "Shader: {} [Click]",
+                self.active_showcase_shader.display_name()
+            );
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 14.0, r.y + (r.height - 21.0) * 0.5),
+                &shader_label,
+                on_surf,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(DRAGGABLE_CARD_A) {
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 14.0, r.y + (r.height - 21.0) * 0.5),
+                "Drag: Flowing Grad + Fire Border",
+                on_surf,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(DRAGGABLE_CARD_B) {
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 14.0, r.y + (r.height - 21.0) * 0.5),
+                "Drag: Pulsing + Smoke Border",
+                on_surf,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(ANIM_SPEED_SLIDER) {
+            let speed_txt = format!("Anim Speed: {:.2}x [Slide]", self.animation_speed);
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 14.0, r.y + 6.0),
+                &speed_txt,
+                accent,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(DROP_TARGET_BUCKET) {
+            let label = format!("Glass + Smoke Border (Dropped: {})", self.dropped_items.len());
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 14.0, r.y + 12.0),
+                &label,
+                accent,
+                r,
+                false,
+            );
+            if r.height >= 64.0 {
+                if let Some(last) = self.dropped_items.last() {
+                    let sub = format!("Last Accepted: {}", last);
+                    push_gpu_text_glyphs(
+                        out,
+                        Point::new(r.x + 14.0, r.y + 38.0),
+                        &sub,
+                        on_surf,
+                        r,
+                        false,
+                    );
+                }
+            }
+        }
+        if let Some(r) = self.layout.bounds(SCROLLABLE_TEXT) {
+            let overscroll_y = self.scrollable_text_overscroll_spring.value;
+            for line in self
+                .scrollable_text_layout
+                .visible_lines(self.scrollable_text_scroll_y, r.height)
+            {
+                let ly = r.y + 8.0 + line.y_offset - self.scrollable_text_scroll_y - overscroll_y;
+                push_gpu_text_glyphs(
+                    out,
+                    Point::new(r.x + 10.0, ly),
+                    &line.text,
+                    on_surf,
+                    r,
+                    false,
+                );
+            }
+        }
+        if let Some(r) = self.layout.bounds(CONTEXT_MENU_REGION) {
+            push_gpu_text_glyphs(
+                out,
+                Point::new(r.x + 12.0, r.y + (r.height - 21.0) * 0.5),
+                "Right-Click Here: Context Menu",
+                accent,
+                r,
+                false,
+            );
+        }
+        if let Some(r) = self.layout.bounds(LAZY_COLUMN) {
+            let overscroll_y = self.lazy_overscroll_spring.value;
+            for item_idx in self.lazy_layout.visible_range.clone() {
+                let mut item_r = self.lazy_layout.item_rect(r, item_idx);
+                item_r.y -= overscroll_y;
+                let txt = format!("#{:04}  Lazy Vulkan Item {}", item_idx, item_idx);
+                let item_color = if self.selected_lazy_item == Some(item_idx) {
+                    accent
+                } else {
+                    on_surf
+                };
+                push_gpu_text_glyphs(
+                    out,
+                    Point::new(item_r.x + 12.0, item_r.y + (item_r.height - 21.0) * 0.5),
+                    &txt,
+                    item_color,
+                    r.intersect(&item_r),
+                    false,
+                );
+            }
+        }
+    }
+
+    /// Appends GPU `GlyphAtlas` quad instances for top-layer overlays (context menu + drag ghost).
+    pub fn append_overlay_text_glyph_instances(&self, out: &mut Vec<SdfPrimitiveInstance>) {
+        if self.viewport.width < 320.0 || self.viewport.height < 200.0 {
+            return;
+        }
+        let th = &self.current_theme;
+        let on_surf = th.colors.on_surface;
+        let on_prim = th.colors.on_primary;
+        let accent = th.colors.accent_glow;
+
+        if let Some(drag) = &self.drag_drop.active_drag {
+            let drag_rect = Rect::new(
+                drag.current_pos.x - 100.0,
+                drag.current_pos.y - 24.0,
+                200.0,
+                48.0,
+            );
+            push_gpu_text_glyphs(
+                out,
+                Point::new(drag_rect.x + 14.0, drag_rect.y + (drag_rect.height - 21.0) * 0.5),
+                &drag.payload_label,
+                on_prim,
+                drag_rect,
+                false,
+            );
+        }
+
+        if self.context_menu.is_open {
+            let menu_w = 296.0_f32;
+            let item_h = 52.0_f32.max(MIN_TOUCH_TARGET_DP);
+            let menu_h = (self.context_menu.items.len() as f32 * item_h) + 12.0;
+            let mx = self
+                .context_menu
+                .anchor_pos
+                .x
+                .min((self.viewport.width - menu_w - 8.0).max(0.0));
+            let my = self
+                .context_menu
+                .anchor_pos
+                .y
+                .min((self.viewport.height - menu_h - 8.0).max(0.0));
+            let menu_rect = Rect::new(mx, my, menu_w, menu_h);
+            let hovered_idx = if menu_rect.contains(self.pointer_pos) {
+                Some(((self.pointer_pos.y - my - 6.0).max(0.0) / item_h).floor() as usize)
+            } else {
+                None
+            };
+            for (idx, item) in self.context_menu.items.iter().enumerate() {
+                let iy = my + 6.0 + (idx as f32) * item_h + (item_h - 21.0) * 0.5;
+                let col = if hovered_idx == Some(idx) {
+                    accent
+                } else {
+                    on_surf
+                };
+                push_gpu_text_glyphs(
+                    out,
+                    Point::new(mx + 14.0, iy),
+                    &item.label,
+                    col,
+                    menu_rect,
+                    false,
+                );
+            }
+        }
+    }
+
     /// Executes a complete frame (animations -> layout -> SDF instance packing -> Vulkan GPU pass)
     /// and records the sample into the Built-In Performance Telemetry Indicator (`PerfOverlay`).
     pub fn render_benchmark_frame(
@@ -1901,12 +2362,11 @@ impl StandardBenchmarkApp {
         let layout_us = layout_start.elapsed().as_secs_f32() * 1_000_000.0;
 
         let pack_start = Instant::now();
-        let instances = self.build_sdf_instances();
-        let overlay_instances = self.build_overlay_sdf_instances();
+        let (gpu_instances, materialized_nodes) = self.build_complete_gpu_instances();
         let sdf_pack_us = pack_start.elapsed().as_secs_f32() * 1_000_000.0;
 
         let vk_stats = vk.render_frame(
-            &instances,
+            &gpu_instances,
             self.pointer_pos,
             self.time_sec,
             self.current_theme.colors.background,
@@ -1915,18 +2375,21 @@ impl StandardBenchmarkApp {
             framebuffer_rgba,
         );
 
-        self.render_text_overlays(framebuffer_w, framebuffer_h, framebuffer_rgba);
-
-        if !overlay_instances.is_empty() {
-            vk.render_overlay_instances(
-                &overlay_instances,
-                self.pointer_pos,
-                self.time_sec,
-                framebuffer_w,
-                framebuffer_h,
-                framebuffer_rgba,
-            );
-            self.render_overlay_text(framebuffer_w, framebuffer_h, framebuffer_rgba);
+        // If running on a system without hardware Vulkan, fall back to CPU text/overlay blitting
+        if !vk_stats.hardware_vulkan_active {
+            self.render_text_overlays(framebuffer_w, framebuffer_h, framebuffer_rgba);
+            let overlay_instances = self.build_overlay_sdf_instances();
+            if !overlay_instances.is_empty() {
+                vk.render_overlay_instances(
+                    &overlay_instances,
+                    self.pointer_pos,
+                    self.time_sec,
+                    framebuffer_w,
+                    framebuffer_h,
+                    framebuffer_rgba,
+                );
+                self.render_overlay_text(framebuffer_w, framebuffer_h, framebuffer_rgba);
+            }
         }
 
         let total_frame_ms = frame_start.elapsed().as_secs_f32() * 1_000.0;
@@ -1936,7 +2399,7 @@ impl StandardBenchmarkApp {
             layout_us,
             sdf_pack_us,
             gpu_execution_us: vk_stats.gpu_timestamp_us,
-            materialized_nodes: instances.len() + overlay_instances.len(),
+            materialized_nodes,
             virtualized_items: self.lazy_total_items,
             draw_calls: vk_stats.draw_calls,
         };
@@ -2787,6 +3250,164 @@ impl ApplierSceneGraph {
         }
         None
     }
+
+    /// Returns `true` when this `ApplierSceneGraph` holds a custom `@Composable` application tree
+    /// (rather than the canonical `StandardBenchmarkApp` tree which registers `RENDERER_BTN = 15`).
+    pub fn is_custom_app_scene(&self) -> bool {
+        self.nodes.len() > 2
+            && !self.nodes.contains_key(&15)
+            && self.nodes.values().any(|n| {
+                n.node_id >= 100
+                    && (n.visual.bg_rgba != 0
+                        || n.visual.border_w > 0.0
+                        || n.shader.shader_id != 0
+                        || n.text.is_some())
+            })
+    }
+
+    /// Converts the retained `ApplierSceneGraph` into a complete GPU `SdfPrimitiveInstance` stream
+    /// (including fullscreen `ElectricJellyfish` background, all node containers/shaders/borders, and
+    /// all `GlyphAtlas` typography quads) so any third-party `@Composable` app renders 100% on the
+    /// hardware Vulkan GPU.
+    pub fn build_gpu_instances(
+        &self,
+        viewport: Rect,
+        theme: &ThemeDescriptor,
+    ) -> (Vec<SdfPrimitiveInstance>, usize) {
+        let mut out = Vec::with_capacity(self.nodes.len() * 4 + 64);
+        let bg_col = theme.colors.background.to_array();
+        let full_clip = [
+            0.0,
+            0.0,
+            viewport.width.max(1.0),
+            viewport.height.max(1.0),
+        ];
+        out.push(SdfPrimitiveInstance {
+            rect: full_clip,
+            corner_radii: [0.0; 4],
+            clip_rect: full_clip,
+            fill_color_start: bg_col,
+            fill_color_end: bg_col,
+            border_color: [0.0; 4],
+            shadow_color: [0.0; 4],
+            params: [
+                0.0,
+                0.0,
+                2.0,
+                ShaderMaterialId::ElectricJellyfish as u32 as f32,
+            ],
+        });
+
+        let mut widget_nodes = 0_usize;
+        self.emit_node_gpu_instances(
+            self.root_id,
+            Rect::new(0.0, 0.0, viewport.width.max(1.0), viewport.height.max(1.0)),
+            theme,
+            &mut out,
+            &mut widget_nodes,
+        );
+        (out, widget_nodes)
+    }
+
+    fn emit_node_gpu_instances(
+        &self,
+        node_id: u64,
+        parent_clip: Rect,
+        theme: &ThemeDescriptor,
+        out: &mut Vec<SdfPrimitiveInstance>,
+        widget_nodes: &mut usize,
+    ) {
+        let Some(node) = self.nodes.get(&node_id) else {
+            return;
+        };
+        let b = node.bounds;
+        if b.width <= 0.5 || b.height <= 0.5 {
+            return;
+        }
+        let node_clip = if node.visual.clip != 0 {
+            parent_clip.intersect(&b)
+        } else {
+            parent_clip
+        };
+
+        let has_box = node_id != self.root_id
+            && (node.visual.bg_rgba != 0
+                || node.visual.border_w > 0.0
+                || node.shader.shader_id != 0
+                || node.image.is_some()
+                || node.kind == 5
+                || node.kind == 6
+                || node.kind == 7);
+
+        if has_box {
+            *widget_nodes += 1;
+            let fill_c = if node.visual.bg_rgba != 0 {
+                Color::from_hex(node.visual.bg_rgba)
+            } else if node.kind == 5 {
+                theme.colors.primary.with_alpha(0.76)
+            } else {
+                theme.colors.surface_container.with_alpha(0.68)
+            };
+            let border_c = if node.visual.border_rgba != 0 {
+                Color::from_hex(node.visual.border_rgba)
+            } else {
+                theme.colors.outline
+            };
+            let mat = if node.image.is_some() {
+                ShaderMaterialId::TexturedImage
+            } else if node.shader.shader_id == 0 {
+                ShaderMaterialId::SubtleGlassReflection
+            } else {
+                ShaderMaterialId::from_u32(node.shader.shader_id as u32)
+            };
+            let radius = if node.visual.corner_radius > 0.0 {
+                node.visual.corner_radius
+            } else {
+                theme.shapes.radius_sm
+            };
+            let bw = if node.visual.border_w > 0.0 {
+                node.visual.border_w
+            } else {
+                1.0
+            };
+            out.push(SdfPrimitiveInstance {
+                rect: b.to_array(),
+                corner_radii: [radius; 4],
+                clip_rect: node_clip.to_array(),
+                fill_color_start: fill_c.to_array(),
+                fill_color_end: fill_c.to_array(),
+                border_color: border_c.to_array(),
+                shadow_color: [0.0, 0.0, 0.0, 0.35],
+                params: [bw, 6.0, theme.shapes.shape_exponent_p, mat as u32 as f32],
+            });
+        }
+
+        if let Some(txt) = &node.text {
+            if !txt.text.is_empty() {
+                let col = if txt.color_rgba != 0 {
+                    Color::from_hex(txt.color_rgba)
+                } else if node.kind == 5 {
+                    theme.colors.on_primary
+                } else {
+                    theme.colors.on_surface
+                };
+                let is_headline = txt.font_size_sp >= 20.0 || txt.font_weight >= 600;
+                let ty = b.y + ((b.height - if is_headline { 26.0 } else { 21.0 }) * 0.5).max(2.0);
+                push_gpu_text_glyphs(
+                    out,
+                    Point::new(b.x + 10.0, ty),
+                    &txt.text,
+                    col,
+                    node_clip.intersect(&b),
+                    is_headline,
+                );
+            }
+        }
+
+        for &child_id in &node.children {
+            self.emit_node_gpu_instances(child_id, node_clip, theme, out, widget_nodes);
+        }
+    }
 }
 
 /// Deterministic Headless UI Test Harness (`IguanodonTestHarness`) for driving synthetic
@@ -3488,6 +4109,115 @@ impl IguanodonTestHarness {
                 f2: 0.0,
                 f3: 0.0,
             });
+        }
+    }
+
+    /// Renders a complete frame directly to the attached hardware Vulkan swapchain
+    /// (`VkSwapchainKHR` on Android `ANativeWindow` or Linux X11 `Window`) and presents it via
+    /// `vkQueuePresentKHR`. Works identically for both `StandardBenchmarkApp` and any custom
+    /// `@Composable` app tree managed by `IguanodonApplier`.
+    pub fn render_and_present(&mut self, dt: f32, width: u32, height: u32) -> FrameSample {
+        let frame_start = Instant::now();
+        self.resize(width as f32, height as f32);
+        self.app.step_animations(dt);
+
+        let layout_start = Instant::now();
+        self.app.rebuild_layout();
+        self.applier_scene
+            .recompute_layout(width as f32, height as f32);
+        let layout_us = layout_start.elapsed().as_secs_f32() * 1_000_000.0;
+
+        let pack_start = Instant::now();
+        let (gpu_instances, materialized_nodes) = if self.applier_scene.is_custom_app_scene() {
+            self.applier_scene
+                .build_gpu_instances(self.app.viewport, &self.app.current_theme)
+        } else {
+            self.app.build_complete_gpu_instances()
+        };
+        let sdf_pack_us = pack_start.elapsed().as_secs_f32() * 1_000_000.0;
+
+        let vk_stats_opt = self.vk.render_and_present(
+            &gpu_instances,
+            self.app.pointer_pos,
+            self.app.time_sec,
+            self.app.current_theme.colors.background,
+            width,
+            height,
+        );
+
+        let total_frame_ms = frame_start.elapsed().as_secs_f32() * 1_000.0;
+        let (gpu_execution_us, draw_calls) = if let Some(vk_stats) = vk_stats_opt {
+            self.app.telemetry.vram_allocated_bytes = vk_stats.vram_allocated_bytes;
+            self.app.telemetry.gpu_device_name = vk_stats.device_name;
+            (vk_stats.gpu_timestamp_us, vk_stats.draw_calls)
+        } else {
+            (0.0, 1)
+        };
+        let sample = FrameSample {
+            total_frame_ms,
+            ffi_decode_us: 12.0,
+            layout_us,
+            sdf_pack_us,
+            gpu_execution_us,
+            materialized_nodes,
+            virtualized_items: self.app.lazy_total_items,
+            draw_calls,
+        };
+        self.app.telemetry.record_frame(sample);
+        sample
+    }
+
+    /// Renders a complete frame offscreen on the hardware Vulkan GPU (or CPU fallback) into
+    /// `self.framebuffer_rgba`, automatically supporting both `StandardBenchmarkApp` and any custom
+    /// `@Composable` app tree managed by `IguanodonApplier`.
+    pub fn render_frame_rgba(&mut self, dt: f32, width: u32, height: u32) -> FrameSample {
+        self.resize(width as f32, height as f32);
+        if self.applier_scene.is_custom_app_scene() {
+            let frame_start = Instant::now();
+            self.app.step_animations(dt);
+            let layout_start = Instant::now();
+            self.applier_scene
+                .recompute_layout(width as f32, height as f32);
+            let layout_us = layout_start.elapsed().as_secs_f32() * 1_000_000.0;
+
+            let pack_start = Instant::now();
+            let (gpu_instances, materialized_nodes) = self
+                .applier_scene
+                .build_gpu_instances(self.app.viewport, &self.app.current_theme);
+            let sdf_pack_us = pack_start.elapsed().as_secs_f32() * 1_000_000.0;
+
+            let vk_stats = self.vk.render_frame(
+                &gpu_instances,
+                self.app.pointer_pos,
+                self.app.time_sec,
+                self.app.current_theme.colors.background,
+                width,
+                height,
+                &mut self.framebuffer_rgba,
+            );
+            let total_frame_ms = frame_start.elapsed().as_secs_f32() * 1_000.0;
+            let sample = FrameSample {
+                total_frame_ms,
+                ffi_decode_us: 12.0,
+                layout_us,
+                sdf_pack_us,
+                gpu_execution_us: vk_stats.gpu_timestamp_us,
+                materialized_nodes,
+                virtualized_items: self.app.lazy_total_items,
+                draw_calls: vk_stats.draw_calls,
+            };
+            self.app.telemetry.vram_allocated_bytes = vk_stats.vram_allocated_bytes;
+            self.app.telemetry.gpu_device_name = vk_stats.device_name;
+            self.app.telemetry.record_frame(sample);
+            sample
+        } else {
+            self.app.render_benchmark_frame(
+                &mut self.vk,
+                dt,
+                width,
+                height,
+                &mut self.framebuffer_rgba,
+            )
         }
     }
 }

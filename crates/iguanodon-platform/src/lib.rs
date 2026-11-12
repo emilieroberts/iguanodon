@@ -409,6 +409,9 @@ pub fn try_run_interactive_window_with_mode(android_mode: bool) -> bool {
             let _ = apply_commands_to_harness(&mut harness, &init_batch.bytes);
         }
 
+        x_flush(dpy);
+        let swapchain_active = harness.vk.attach_xlib_surface(dpy, win as u64, win_w, win_h);
+
         let mut bgra_buf = vec![0_u8; (win_w * win_h * 4) as usize];
         let mut ximg = x_create_image(
             dpy,
@@ -445,6 +448,8 @@ pub fn try_run_interactive_window_with_mode(android_mode: bool) -> bool {
         }
 
         let mut last_tick = Instant::now();
+        let mut last_interaction = Instant::now();
+        let mut needs_redraw = true;
         let mut touch_down_tracker: Option<(Instant, Point, bool)> = None;
         let mut running = true;
         while running {
@@ -452,6 +457,8 @@ pub fn try_run_interactive_window_with_mode(android_mode: bool) -> bool {
             while x_pending(dpy) > 0 {
                 let mut ev: XEvent = std::mem::zeroed();
                 x_next_event(dpy, &mut ev);
+                last_interaction = Instant::now();
+                needs_redraw = true;
                 match ev.type_ {
                     2 => {
                         // KeyPress
@@ -587,41 +594,65 @@ pub fn try_run_interactive_window_with_mode(android_mode: bool) -> bool {
                 }
             }
 
+            if touch_down_tracker.is_some()
+                || harness.active_scroll_drag.is_some()
+                || harness.app.has_active_spring_or_drag()
+            {
+                last_interaction = Instant::now();
+                needs_redraw = true;
+            }
+
+            let is_actively_interacting = last_interaction.elapsed() < Duration::from_millis(300);
+            let animations_active = harness.app.animation_speed > 0.001
+                && harness.app.renderer_backend != iguanodon_widgets::RendererBackend::ComposeUi;
+
+            if !is_actively_interacting && !animations_active && !needs_redraw {
+                std::thread::sleep(Duration::from_millis(40));
+                last_tick = Instant::now();
+                continue;
+            }
+
             let frame_begin = Instant::now();
             let dt = last_tick.elapsed().as_secs_f32().clamp(1.0 / 240.0, 0.05);
             last_tick = frame_begin;
+            needs_redraw = false;
 
-            harness.app.render_benchmark_frame(
-                &mut harness.vk,
-                dt,
-                win_w,
-                win_h,
-                &mut harness.framebuffer_rgba,
-            );
+            if swapchain_active {
+                harness.render_and_present(dt, win_w, win_h);
+                x_flush(dpy);
+            } else {
+                harness.render_frame_rgba(dt, win_w, win_h);
 
-            // Convert RGBA -> BGRA for X11 ZPixmap
-            for (src, dst) in harness
-                .framebuffer_rgba
-                .chunks_exact(4)
-                .zip(bgra_buf.chunks_exact_mut(4))
-            {
-                dst[0] = src[2];
-                dst[1] = src[1];
-                dst[2] = src[0];
-                dst[3] = 255;
+                // Convert RGBA -> BGRA for X11 ZPixmap fallback
+                for (src, dst) in harness
+                    .framebuffer_rgba
+                    .chunks_exact(4)
+                    .zip(bgra_buf.chunks_exact_mut(4))
+                {
+                    dst[0] = src[2];
+                    dst[1] = src[1];
+                    dst[2] = src[0];
+                    dst[3] = 255;
+                }
+
+                x_put_image(dpy, win, gc, ximg, 0, 0, 0, 0, win_w, win_h);
+                x_flush(dpy);
             }
 
-            x_put_image(dpy, win, gc, ximg, 0, 0, 0, 0, win_w, win_h);
-            x_flush(dpy);
-            let target_interval = Duration::from_secs_f32(
-                harness.app.power_mode.target_frame_interval_sec(),
-            );
+            let base_interval = harness.app.power_mode.target_frame_interval_sec();
+            let target_interval = if is_actively_interacting {
+                Duration::from_secs_f32(base_interval)
+            } else {
+                // Adaptive idle pacing: 24 FPS (41.6ms) for calm ambient shaders when stationary
+                Duration::from_secs_f32(base_interval.max(1.0 / 24.0))
+            };
             let elapsed = frame_begin.elapsed();
             if elapsed < target_interval {
                 std::thread::sleep(target_interval - elapsed);
             }
         }
 
+        harness.vk.detach_surface();
         x_close_display(dpy);
         return true;
     }

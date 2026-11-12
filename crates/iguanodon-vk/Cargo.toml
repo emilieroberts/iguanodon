@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 iguanodon-core = { path = "../iguanodon-core" }
 iguanodon-shaders = { path = "../iguanodon-shaders" }
+iguanodon-text = { path = "../iguanodon-text" }

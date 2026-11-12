@@ -113,6 +113,22 @@ object IguanodonNativeBridge {
     external fun nativeBackspace(handle: Long)
 
     @JvmStatic
+    external fun nativeSetAndroidSurface(
+        handle: Long,
+        surface: Any?,
+        width: Int,
+        height: Int,
+    ): Boolean
+
+    @JvmStatic
+    external fun nativeRenderAndPresent(
+        handle: Long,
+        dtSec: Float,
+        width: Int,
+        height: Int,
+    ): Float
+
+    @JvmStatic
     external fun nativeRenderFrameByteArray(
         handle: Long,
         dtSec: Float,
@@ -492,6 +508,42 @@ class IguanodonSession(
             IguanodonNativeBridge.nativeBackspace(nativeHandle)
             pollEvents()
         }
+    }
+
+    var hasVulkanSwapchain: Boolean = false
+        private set
+
+    fun attachAndroidSurface(surface: Any?, width: Int, height: Int): Boolean {
+        if (nativeHandle == 0L) {
+            hasVulkanSwapchain = false
+            return false
+        }
+        val clampedW = width.coerceIn(0, 3840)
+        val clampedH = height.coerceIn(0, 3840)
+        if (surface != null && clampedW >= 240 && clampedH >= 240) {
+            viewportWidth = clampedW
+            viewportHeight = clampedH
+        }
+        hasVulkanSwapchain = IguanodonNativeBridge.nativeSetAndroidSurface(
+            nativeHandle,
+            surface,
+            clampedW,
+            clampedH,
+        )
+        return hasVulkanSwapchain
+    }
+
+    fun renderAndPresent(dtSeconds: Float): Float {
+        flushPendingCommands()
+        pollEvents()
+        if (nativeHandle == 0L) return 0f
+        latestFrameMs = IguanodonNativeBridge.nativeRenderAndPresent(
+            nativeHandle,
+            dtSeconds,
+            viewportWidth,
+            viewportHeight,
+        )
+        return latestFrameMs
     }
 
     fun renderFrame(dtSeconds: Float, outRgba: ByteArray): Float {

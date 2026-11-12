@@ -41,6 +41,7 @@ pub enum ShaderMaterialId {
     FlowingGentleGradient = 11,
     ElectricJellyfish = 12,
     SubtleGlassReflection = 13,
+    GlyphAtlas = 14,
 }
 
 impl ShaderMaterialId {
@@ -74,6 +75,7 @@ impl ShaderMaterialId {
             11 => Self::FlowingGentleGradient,
             12 => Self::ElectricJellyfish,
             13 => Self::SubtleGlassReflection,
+            14 => Self::GlyphAtlas,
             _ => Self::StandardSdf,
         }
     }
@@ -94,6 +96,7 @@ impl ShaderMaterialId {
             Self::FlowingGentleGradient => "Flowing Gradient",
             Self::ElectricJellyfish => "Electric Jellyfish",
             Self::SubtleGlassReflection => "Subtle Reflection",
+            Self::GlyphAtlas => "Glyph Atlas",
         }
     }
 }
@@ -357,8 +360,28 @@ pub fn build_vulkan_compute_spirv(seed_constant: u32) -> Vec<u32> {
     ]
 }
 
+const SDF_UBER_VERT_SPV_BYTES: &[u8] = include_bytes!("../shaders/sdf_uber.vert.spv");
+const SDF_UBER_FRAG_SPV_BYTES: &[u8] = include_bytes!("../shaders/sdf_uber.frag.spv");
+
+fn bytes_to_spirv_words(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Real `glslc`-compiled SPIR-V Vertex Shader (`sdf_uber.vert`) for the hardware Vulkan Graphics Pipeline.
+pub fn sdf_uber_vertex_spirv() -> Vec<u32> {
+    bytes_to_spirv_words(SDF_UBER_VERT_SPV_BYTES)
+}
+
+/// Real `glslc`-compiled SPIR-V Fragment Shader (`sdf_uber.frag`) for the hardware Vulkan Graphics Pipeline.
+pub fn sdf_uber_fragment_spirv() -> Vec<u32> {
+    bytes_to_spirv_words(SDF_UBER_FRAG_SPV_BYTES)
+}
+
 pub fn sdf_uber_shader_spirv() -> Vec<u32> {
-    build_vulkan_compute_spirv(0x49475541) // "IGUA"
+    sdf_uber_fragment_spirv()
 }
 
 pub fn dual_kawase_blur_spirv() -> Vec<u32> {
@@ -404,20 +427,22 @@ pub fn subtle_glass_reflection_spirv() -> Vec<u32> {
 /// Smooth 3-term cosine spectrum color ramp for the Color-Cycling Glowbar (`hue in [0.0, 1.0]`).
 #[inline]
 pub fn color_cycling_spectrum(hue: f32) -> Color {
+    let lut = FireSimulationLut::global();
     let tau = std::f32::consts::TAU;
-    let r = (0.58 + 0.42 * (tau * (hue + 0.00)).cos()).clamp(0.0, 1.0);
-    let g = (0.58 + 0.42 * (tau * (hue + 0.33)).cos()).clamp(0.0, 1.0);
-    let b = (0.64 + 0.36 * (tau * (hue + 0.67)).cos()).clamp(0.0, 1.0);
+    let r = (0.58 + 0.42 * lut.fast_cos(tau * (hue + 0.00))).clamp(0.0, 1.0);
+    let g = (0.58 + 0.42 * lut.fast_cos(tau * (hue + 0.33))).clamp(0.0, 1.0);
+    let b = (0.64 + 0.36 * lut.fast_cos(tau * (hue + 0.67))).clamp(0.0, 1.0);
     Color::rgba(r, g, b, 1.0)
 }
 
 /// Endless left-to-right flowing silk gradient through warm golden-yellows -> buttercream -> luminous white.
 #[inline]
 pub fn flowing_yellow_white_gradient(uv_x: f32, uv_y: f32, t_sec: f32, base_tint: Color) -> Color {
+    let lut = FireSimulationLut::global();
     // Slow, serene endless loop flowing from left to right (`uv_x - t_sec * 0.085`)
     let phase = (uv_x - t_sec * 0.085 + uv_y * 0.12).rem_euclid(1.0);
-    let wave = 0.5 + 0.5 * (phase * std::f32::consts::TAU).cos();
-    let shimmer = 0.5 + 0.5 * ((phase * 2.0 - 0.15) * std::f32::consts::TAU).sin();
+    let wave = 0.5 + 0.5 * lut.fast_cos(phase * std::f32::consts::TAU);
+    let shimmer = 0.5 + 0.5 * lut.fast_sin((phase * 2.0 - 0.15) * std::f32::consts::TAU);
 
     // Rich golden yellow -> sunlit amber-yellow -> soft buttercream -> pure warm ivory-white
     let deep_yellow = Color::rgba(
@@ -438,8 +463,8 @@ pub fn flowing_yellow_white_gradient(uv_x: f32, uv_y: f32, t_sec: f32, base_tint
 /// - `p = 4.2`: iOS Cupertino continuous superellipse squircle
 /// - `p = 1.0`: Chamfered octagon box
 ///
-/// Optimized with an exact analytical fast-path: `powf` is ONLY invoked inside the 4 corner
-/// quadrants (`qx > 0.0 && qy > 0.0`), making interior and straight-edge pixels ~15x faster at 4K.
+/// Optimized with an exact analytical fast-path + homogeneous 1D LUT (`(1 + t^p)^(1/p)`):
+/// zero `powf()` calls per pixel across the entire engine!
 #[inline]
 pub fn evaluate_sdf_superellipse(local_pt: Point, half_extents: Point, radius: f32, p: f32) -> f32 {
     let r = radius.clamp(0.0, half_extents.x.min(half_extents.y));
@@ -451,14 +476,17 @@ pub fn evaluate_sdf_superellipse(local_pt: Point, half_extents: Point, radius: f
         return qx.max(qy) - r;
     }
 
-    // Fast path 2: Standard circular corner (p == 2.0) uses hardware sqrt
-    if (p - 2.0).abs() < 0.05 {
-        return (qx * qx + qy * qy).sqrt() - r;
-    }
-
-    // General L^p superellipse corner quadrant
-    let p_clamped = p.clamp(1.0, 8.0);
-    (qx.powf(p_clamped) + qy.powf(p_clamped)).powf(1.0 / p_clamped) - r
+    // Fast path 2: Homogeneous L^p superellipse corner lookup:
+    // (qx^p + qy^p)^(1/p) == max(qx, qy) * (1 + (min(qx, qy) / max(qx, qy))^p)^(1/p)
+    let m = qx.max(qy);
+    let t = qx.min(qy) / m;
+    let p_idx = (((p.clamp(1.0, 4.75) - 1.0) * 4.0).round() as usize).min(15);
+    let t_scaled = t * 64.0;
+    let ti = (t_scaled as usize).min(63);
+    let tf = t_scaled - ti as f32;
+    let row = &FireSimulationLut::global().superellipse_lut[p_idx];
+    let factor = row[ti] + (row[ti + 1] - row[ti]) * tf;
+    m * factor - r
 }
 
 /// Fast deterministic 2D hash in `[0.0, 1.0]` without trig banding artifacts.
@@ -540,11 +568,15 @@ pub fn blackbody_fire_color(temp: f32) -> Color {
     Color::rgba(r, g, b, 1.0)
 }
 
-/// Precomputed L1-cache-resident 256x256 tileable fBm turbulence field and 256-entry Blackbody LUT.
-/// Eliminates all per-pixel `powf()` and 12-octave noise loops so 4K (`3840x2160`) fire runs at 120+ FPS.
+/// Precomputed L1-cache-resident 256x256 tileable fBm turbulence field, pre-warped 256x256 fire/smoke LUT,
+/// 256-entry Blackbody LUT, 16x65 homogeneous superellipse corner LUT, and 1024-entry trig LUT.
+/// Eliminates all per-pixel `powf()`, `sin()`, `cos()`, and multi-lookup domain warping.
 pub struct FireSimulationLut {
     pub turbulence_256: Vec<f32>,
+    pub warped_256: Vec<f32>,
     pub blackbody_lut: [[f32; 3]; 256],
+    pub superellipse_lut: [[f32; 65]; 16],
+    pub sin_lut_1024: [f32; 1024],
 }
 
 impl FireSimulationLut {
@@ -574,16 +606,75 @@ impl FireSimulationLut {
                     turbulence_256[y * 256 + x] = val;
                 }
             }
+            let sample_turb_raw = |nx: f32, ny: f32| -> f32 {
+                let sx = nx * 16.0;
+                let sy = ny * 16.0;
+                let fx = sx.floor();
+                let fy = sy.floor();
+                let tx = sx - fx;
+                let ty = sy - fy;
+                let x0 = (fx as i32) & 255;
+                let y0 = (fy as i32) & 255;
+                let x1 = (x0 + 1) & 255;
+                let y1 = (y0 + 1) & 255;
+                let r0 = (y0 as usize) * 256;
+                let r1 = (y1 as usize) * 256;
+                let v00 = turbulence_256[r0 + x0 as usize];
+                let v10 = turbulence_256[r0 + x1 as usize];
+                let v01 = turbulence_256[r1 + x0 as usize];
+                let v11 = turbulence_256[r1 + x1 as usize];
+                let top = v00 + (v10 - v00) * tx;
+                let bot = v01 + (v11 - v01) * tx;
+                top + (bot - top) * ty
+            };
+            // Precompute the domain-warped FBM table once so `sample_warped_fire` is 1 lookup instead of 3!
+            let mut warped_256 = vec![0.0_f32; 256 * 256];
+            for y in 0..256 {
+                for x in 0..256 {
+                    let nx = x as f32 / 16.0;
+                    let ny = y as f32 / 16.0;
+                    let qx = sample_turb_raw(nx, ny) - 0.5;
+                    let qy = sample_turb_raw(nx + 4.1, ny + 2.7) - 0.5;
+                    warped_256[y * 256 + x] = sample_turb_raw(nx + qx * 1.8, ny + qy * 1.8);
+                }
+            }
             let mut blackbody_lut = [[0.0_f32; 3]; 256];
             for (i, slot) in blackbody_lut.iter_mut().enumerate() {
                 let c = blackbody_fire_color(i as f32 / 255.0);
                 *slot = [c.r, c.g, c.b];
             }
+            let mut superellipse_lut = [[1.0_f32; 65]; 16];
+            for p_idx in 0..16 {
+                let p = 1.0 + p_idx as f32 * 0.25;
+                for ti in 0..=64 {
+                    let t = ti as f32 / 64.0;
+                    superellipse_lut[p_idx][ti] = (1.0 + t.powf(p)).powf(1.0 / p);
+                }
+            }
+            let mut sin_lut_1024 = [0.0_f32; 1024];
+            for (i, slot) in sin_lut_1024.iter_mut().enumerate() {
+                *slot = (i as f32 * (std::f32::consts::TAU / 1024.0)).sin();
+            }
             Self {
                 turbulence_256,
+                warped_256,
                 blackbody_lut,
+                superellipse_lut,
+                sin_lut_1024,
             }
         })
+    }
+
+    #[inline]
+    pub fn fast_sin(&self, radians: f32) -> f32 {
+        let idx = ((radians * (1024.0 / std::f32::consts::TAU)) as i32) & 1023;
+        self.sin_lut_1024[idx as usize]
+    }
+
+    #[inline]
+    pub fn fast_cos(&self, radians: f32) -> f32 {
+        let idx = (((radians * (1024.0 / std::f32::consts::TAU)) as i32) + 256) & 1023;
+        self.sin_lut_1024[idx as usize]
     }
 
     #[inline]
@@ -613,9 +704,27 @@ impl FireSimulationLut {
 
     #[inline]
     pub fn sample_warped_fire(&self, nx: f32, ny: f32) -> f32 {
-        let qx = self.sample_turbulence(nx, ny) - 0.5;
-        let qy = self.sample_turbulence(nx + 4.1, ny + 2.7) - 0.5;
-        self.sample_turbulence(nx + qx * 1.8, ny + qy * 1.8)
+        let sx = nx * 16.0;
+        let sy = ny * 16.0;
+        let fx = sx.floor();
+        let fy = sy.floor();
+        let tx = sx - fx;
+        let ty = sy - fy;
+        let x0 = (fx as i32) & 255;
+        let y0 = (fy as i32) & 255;
+        let x1 = (x0 + 1) & 255;
+        let y1 = (y0 + 1) & 255;
+
+        let r0 = (y0 as usize) * 256;
+        let r1 = (y1 as usize) * 256;
+        let v00 = self.warped_256[r0 + x0 as usize];
+        let v10 = self.warped_256[r0 + x1 as usize];
+        let v01 = self.warped_256[r1 + x0 as usize];
+        let v11 = self.warped_256[r1 + x1 as usize];
+
+        let top = v00 + (v10 - v00) * tx;
+        let bot = v01 + (v11 - v01) * tx;
+        top + (bot - top) * ty
     }
 
     #[inline]
@@ -623,6 +732,18 @@ impl FireSimulationLut {
         let idx = (temp.clamp(0.0, 1.0) * 255.0) as usize;
         let rgb = self.blackbody_lut[idx.min(255)];
         Color::rgba(rgb[0], rgb[1], rgb[2], 1.0)
+    }
+
+    /// Packs the 256x256 FBM (`r`) and Domain-Warped (`g`) noise tables into a 256x256 RGBA8 texture
+    /// for hardware Vulkan `sampler2D u_noise_lut` binding (`set = 0, binding = 3`).
+    pub fn pack_gpu_noise_rgba8(&self) -> Vec<u8> {
+        let mut rgba = Vec::with_capacity(256 * 256 * 4);
+        for i in 0..(256 * 256) {
+            let fbm = (self.turbulence_256[i].clamp(0.0, 1.0) * 255.0).round() as u8;
+            let wrp = (self.warped_256[i].clamp(0.0, 1.0) * 255.0).round() as u8;
+            rgba.extend_from_slice(&[fbm, wrp, fbm, 255]);
+        }
+        rgba
     }
 }
 
@@ -1441,6 +1562,9 @@ pub fn evaluate_sdf_instance_foreground(
     let shadow_blur = inst.params[1];
     let p = inst.params[2];
     let (material_id, border_effect) = unpack_material_and_border(inst.params[3]);
+    if material_id == ShaderMaterialId::GlyphAtlas as u32 {
+        return (Color::TRANSPARENT, 0.0);
+    }
 
     let dist = evaluate_sdf_superellipse(local, half, radius, p);
     let inv_w = 1.0 / inst.rect[2].max(1.0);
@@ -1472,13 +1596,13 @@ pub fn evaluate_sdf_instance_foreground(
         };
 
         if (has_smoke_border || material_id == ShaderMaterialId::GentleSmoke as u32) && dist < 30.0 {
-            let lut = FireSimulationLut::global();
-            let drift = (t_sec * 0.22 + uv_y * 1.8).sin() * 0.35;
-            let nx = (px - inst.rect[0]) * 0.024 + drift;
-            let ny = (py - inst.rect[1]) * 0.028 + t_sec * 0.34;
             let top_bias = (1.0 - uv_y).clamp(0.0, 1.0);
             let reach = 22.0 + 8.0 * top_bias;
             if dist < reach {
+                let lut = FireSimulationLut::global();
+                let drift = lut.fast_sin(t_sec * 0.22 + uv_y * 1.8) * 0.35;
+                let nx = (px - inst.rect[0]) * 0.024 + drift;
+                let ny = (py - inst.rect[1]) * 0.028 + t_sec * 0.34;
                 let falloff = (1.0 - dist / reach).clamp(0.0, 1.0);
                 // Keep smoke wispy (clear transparent space between tendrils) while extending further before dissipating
                 let threshold = 0.16 + 0.10 * (1.0 - falloff);
@@ -1492,29 +1616,31 @@ pub fn evaluate_sdf_instance_foreground(
                 }
             }
         } else if has_fire_border && dist < 18.0 {
-            let lut = FireSimulationLut::global();
-            let wind = ((px - pointer.x) * 0.0045).clamp(-0.35, 0.35);
-            let nx = (px - inst.rect[0]) * 0.045 + wind * (1.0 - uv_y);
-            let ny = (py - inst.rect[1]) * 0.055 + t_sec * 1.65;
-
-            let flame_noise = lut.sample_warped_fire(nx, ny);
-            // Smooth vertical transition from bottom to top (no step cutoff at local.y == 0.0!)
             let top_boost = (1.0 - uv_y).clamp(0.0, 1.0);
             let upward_reach = if material_id == ShaderMaterialId::ProceduralFire as u32 {
                 8.5 + 6.5 * top_boost
             } else {
                 7.0 + 5.5 * top_boost
             };
-            let corona_falloff = (1.0 - (dist / upward_reach)).clamp(0.0, 1.0);
-            let temp = (corona_falloff * (0.42 + flame_noise * 0.85)).clamp(0.0, 1.0);
+            if dist < upward_reach {
+                let lut = FireSimulationLut::global();
+                let wind = ((px - pointer.x) * 0.0045).clamp(-0.35, 0.35);
+                let nx = (px - inst.rect[0]) * 0.045 + wind * (1.0 - uv_y);
+                let ny = (py - inst.rect[1]) * 0.055 + t_sec * 1.65;
 
-            if temp > 0.08 {
-                let flame_c = lut.lookup_blackbody(temp * 0.92);
-                let corona_alpha = (temp * corona_falloff * 0.85).clamp(0.0, 1.0);
-                let combined_alpha = sh_alpha * (1.0 - corona_alpha) + corona_alpha;
-                if combined_alpha > 1e-4 {
-                    sh_col = sh_col.lerp(flame_c, (corona_alpha / combined_alpha).clamp(0.0, 1.0));
-                    sh_alpha = combined_alpha.clamp(0.0, 1.0);
+                let flame_noise = lut.sample_warped_fire(nx, ny);
+                let corona_falloff = (1.0 - (dist / upward_reach)).clamp(0.0, 1.0);
+                let temp = (corona_falloff * (0.42 + flame_noise * 0.85)).clamp(0.0, 1.0);
+
+                if temp > 0.08 {
+                    let flame_c = lut.lookup_blackbody(temp * 0.92);
+                    let corona_alpha = (temp * corona_falloff * 0.85).clamp(0.0, 1.0);
+                    let combined_alpha = sh_alpha * (1.0 - corona_alpha) + corona_alpha;
+                    if combined_alpha > 1e-4 {
+                        sh_col =
+                            sh_col.lerp(flame_c, (corona_alpha / combined_alpha).clamp(0.0, 1.0));
+                        sh_alpha = combined_alpha.clamp(0.0, 1.0);
+                    }
                 }
             }
         } else if material_id == ShaderMaterialId::ColorCyclingGlowbar as u32 && dist < 12.0 {
@@ -1642,7 +1768,7 @@ pub fn evaluate_sdf_instance_foreground(
         x if x == ShaderMaterialId::GentleSmoke as u32 => {
             // 1. Gentle Smoke: Soft, wispy laminar vapor tendrils drifting slowly upward
             let lut = FireSimulationLut::global();
-            let sway = (t_sec * 0.22 + uv_y * 2.4).sin() * 0.28;
+            let sway = lut.fast_sin(t_sec * 0.22 + uv_y * 2.4) * 0.28;
             let nx = (px - inst.rect[0]) * 0.020 + sway * (1.0 - uv_y * 0.6);
             let ny = (py - inst.rect[1]) * 0.024 + t_sec * 0.32;
             let fbm = lut.sample_warped_fire(nx, ny);
@@ -1660,23 +1786,24 @@ pub fn evaluate_sdf_instance_foreground(
         }
         x if x == ShaderMaterialId::GentlePulsingLights as u32 => {
             // 2. Gently Pulsing Lights: Three soft phase-offset breathing ambient bokeh light orbs (slow & calm)
+            let lut = FireSimulationLut::global();
             let orbs: [(f32, f32, f32, [f32; 3]); 3] = [
                 (
-                    0.24 + 0.06 * (t_sec * 0.20).sin(),
-                    0.38 + 0.08 * (t_sec * 0.15).cos(),
-                    0.55 + 0.45 * (t_sec * 0.48 + 0.0).sin(),
+                    0.24 + 0.06 * lut.fast_sin(t_sec * 0.20),
+                    0.38 + 0.08 * lut.fast_cos(t_sec * 0.15),
+                    0.55 + 0.45 * lut.fast_sin(t_sec * 0.48),
                     [1.00, 0.84, 0.42],
                 ),
                 (
-                    0.54 + 0.07 * (t_sec * 0.18 + 1.4).cos(),
-                    0.62 + 0.07 * (t_sec * 0.22).sin(),
-                    0.55 + 0.45 * (t_sec * 0.42 + 2.1).sin(),
+                    0.54 + 0.07 * lut.fast_cos(t_sec * 0.18 + 1.4),
+                    0.62 + 0.07 * lut.fast_sin(t_sec * 0.22),
+                    0.55 + 0.45 * lut.fast_sin(t_sec * 0.42 + 2.1),
                     [0.38, 0.92, 1.00],
                 ),
                 (
-                    0.78 + 0.05 * (t_sec * 0.16 + 2.8).sin(),
-                    0.34 + 0.08 * (t_sec * 0.19).cos(),
-                    0.55 + 0.45 * (t_sec * 0.52 + 4.2).sin(),
+                    0.78 + 0.05 * lut.fast_sin(t_sec * 0.16 + 2.8),
+                    0.34 + 0.08 * lut.fast_cos(t_sec * 0.19),
+                    0.55 + 0.45 * lut.fast_sin(t_sec * 0.52 + 4.2),
                     [0.92, 0.58, 1.00],
                 ),
             ];
@@ -1704,8 +1831,9 @@ pub fn evaluate_sdf_instance_foreground(
         }
         x if x == ShaderMaterialId::ReflectiveGlass as u32 => {
             // 3. Reflective Glass: High-index optical glass with diagonal specular bands & Fresnel bevel
+            let lut = FireSimulationLut::global();
             let ptr_parallax = ((pointer.x - cx) * 0.0006 + (pointer.y - cy) * 0.0004).clamp(-0.22, 0.22);
-            let sweep = uv_x * 0.72 + uv_y * 0.44 - ptr_parallax + (t_sec * 0.14).sin() * 0.09;
+            let sweep = uv_x * 0.72 + uv_y * 0.44 - ptr_parallax + lut.fast_sin(t_sec * 0.14) * 0.09;
             let band_primary = (1.0 - ((sweep - 0.48).abs() * 6.5)).clamp(0.0, 1.0);
             let band_secondary = (1.0 - ((sweep - 0.74).abs() * 11.0)).clamp(0.0, 1.0);
             let spec_band = band_primary * band_primary * 0.38 + band_secondary * band_secondary * 0.22;
@@ -1722,8 +1850,9 @@ pub fn evaluate_sdf_instance_foreground(
         }
         x if x == ShaderMaterialId::SubtleGlassReflection as u32 => {
             // 4. Subtle Glass Reflection: Whisper-soft diagonal optical sheen + faint top glint (much more subtle than ReflectiveGlass)
+            let lut = FireSimulationLut::global();
             let ptr_parallax = ((pointer.x - cx) * 0.00045 + (pointer.y - cy) * 0.00035).clamp(-0.16, 0.16);
-            let sweep = uv_x * 0.68 + uv_y * 0.42 - ptr_parallax + (t_sec * 0.10).sin() * 0.06;
+            let sweep = uv_x * 0.68 + uv_y * 0.42 - ptr_parallax + lut.fast_sin(t_sec * 0.10) * 0.06;
             let b1 = (1.0 - ((sweep - 0.46).abs() * 5.2)).clamp(0.0, 1.0);
             let b2 = (1.0 - ((sweep - 0.72).abs() * 9.0)).clamp(0.0, 1.0);
             let spec_band = b1 * b1 * 0.075 + b2 * b2 * 0.040;
@@ -1782,7 +1911,7 @@ pub fn evaluate_sdf_instance_foreground(
     if border_w > 0.0 && dist > -border_w - 5.5 {
         if has_smoke_border {
             let lut = FireSimulationLut::global();
-            let sway = (t_sec * 0.24 + uv_y * 2.0).sin() * 0.30;
+            let sway = lut.fast_sin(t_sec * 0.24 + uv_y * 2.0) * 0.30;
             let nx = (px - inst.rect[0]) * 0.032 + sway;
             let ny = (py - inst.rect[1]) * 0.036 + t_sec * 0.38;
             let fbm = lut.sample_warped_fire(nx, ny);

@@ -218,7 +218,6 @@ class IguanodonVulkanSurfaceView(
             logicalW = (logicalH.toFloat() * aspect).toInt().coerceIn(1024, 1680)
         }
         session.resize(logicalW, logicalH)
-        ensureBuffersMatchViewport()
         applyScaledSafeInsets()
     }
 
@@ -245,6 +244,11 @@ class IguanodonVulkanSurfaceView(
         if (width > 0 && height > 0) {
             updateViewportAndBuffers(width, height)
         }
+        session.attachAndroidSurface(
+            holder.surface,
+            session.viewportWidth,
+            session.viewportHeight,
+        )
         requestApplyInsets()
         syncSystemBarIconPolarity(darkTheme = (session.currentThemeMode == IguanodonThemeMode.Dark))
         Choreographer.getInstance().postFrameCallback(this)
@@ -252,11 +256,17 @@ class IguanodonVulkanSurfaceView(
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         updateViewportAndBuffers(width, height)
+        session.attachAndroidSurface(
+            holder.surface,
+            session.viewportWidth,
+            session.viewportHeight,
+        )
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         running = false
         Choreographer.getInstance().removeFrameCallback(this)
+        session.attachAndroidSurface(null, 0, 0)
     }
 
     override fun doFrame(frameTimeNanos: Long) {
@@ -272,22 +282,26 @@ class IguanodonVulkanSurfaceView(
 
         if (width > 0 && height > 0) {
             updateViewportAndBuffers(width, height)
-        } else {
-            ensureBuffersMatchViewport()
         }
 
         compositionHost.doFrame(frameTimeNanos)
-        session.renderFrame(dt, rgbaBytes)
 
-        val holder = backingSurfaceView.holder
-        val canvas = holder.lockCanvas()
-        if (canvas != null) {
-            try {
-                frameBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgbaBytes))
-                val dstRect = Rect(0, 0, canvas.width, canvas.height)
-                canvas.drawBitmap(frameBitmap, null, dstRect, null)
-            } finally {
-                holder.unlockCanvasAndPost(canvas)
+        if (session.hasVulkanSwapchain) {
+            session.renderAndPresent(dt)
+        } else {
+            ensureBuffersMatchViewport()
+            session.renderFrame(dt, rgbaBytes)
+
+            val holder = backingSurfaceView.holder
+            val canvas = holder.lockCanvas()
+            if (canvas != null) {
+                try {
+                    frameBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgbaBytes))
+                    val dstRect = Rect(0, 0, canvas.width, canvas.height)
+                    canvas.drawBitmap(frameBitmap, null, dstRect, null)
+                } finally {
+                    holder.unlockCanvasAndPost(canvas)
+                }
             }
         }
 

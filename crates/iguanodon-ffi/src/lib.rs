@@ -759,6 +759,16 @@ pub fn apply_commands_to_harness(
                 harness.applier_scene.ensure_node(node_id, 0).text = Some(payload);
             }
             DecodedCommand::SetImageBytes { node_id, payload } => {
+                if payload.width > 0 && payload.height > 0 {
+                    harness
+                        .vk
+                        .register_texture(iguanodon_widgets::GpuImageTexture {
+                            id: node_id as u32,
+                            width: payload.width,
+                            height: payload.height,
+                            pixels_rgba8: payload.rgba_bytes.clone(),
+                        });
+                }
                 harness.applier_scene.ensure_node(node_id, 0).image = Some(payload);
             }
             DecodedCommand::SetScrollState {
@@ -1023,18 +1033,85 @@ pub unsafe extern "C" fn iguanodon_render_frame(
     let harness = &mut *engine_ptr;
     let w = (harness.app.viewport.width as u32).max(64);
     let h = (harness.app.viewport.height as u32).max(40);
-    let sample = harness.app.render_benchmark_frame(
-        &mut harness.vk,
-        dt_sec,
-        w,
-        h,
-        &mut harness.framebuffer_rgba,
-    );
+    let sample = harness.render_frame_rgba(dt_sec, w, h);
+    sample.total_frame_ms
+}
+
+/// Attaches an Android `ANativeWindow*` to the engine's hardware Vulkan `VkSwapchainKHR`
+/// (or detaches the surface when `anative_window` is null).
+///
+/// # Safety
+/// `engine_ptr` must be a valid pointer returned by `iguanodon_engine_create`.
+#[no_mangle]
+pub unsafe extern "C" fn iguanodon_attach_android_surface(
+    engine_ptr: *mut IguanodonTestHarness,
+    anative_window: *mut std::ffi::c_void,
+    width: u32,
+    height: u32,
+) -> bool {
+    if engine_ptr.is_null() {
+        return false;
+    }
+    let harness = &mut *engine_ptr;
+    if anative_window.is_null() || width == 0 || height == 0 {
+        harness.vk.detach_surface();
+        return false;
+    }
+    harness.resize(width as f32, height as f32);
+    harness
+        .vk
+        .attach_android_surface(anative_window, width, height)
+}
+
+/// Attaches a Linux X11 `Display*` and `Window` to the engine's hardware Vulkan `VkSwapchainKHR`
+/// (or detaches the surface when `dpy` is null or `window == 0`).
+///
+/// # Safety
+/// `engine_ptr` must be a valid pointer returned by `iguanodon_engine_create`.
+#[no_mangle]
+pub unsafe extern "C" fn iguanodon_attach_xlib_surface(
+    engine_ptr: *mut IguanodonTestHarness,
+    dpy: *mut std::ffi::c_void,
+    window: u64,
+    width: u32,
+    height: u32,
+) -> bool {
+    if engine_ptr.is_null() {
+        return false;
+    }
+    let harness = &mut *engine_ptr;
+    if dpy.is_null() || window == 0 || width == 0 || height == 0 {
+        harness.vk.detach_surface();
+        return false;
+    }
+    harness.resize(width as f32, height as f32);
+    harness.vk.attach_xlib_surface(dpy, window, width, height)
+}
+
+/// Renders a frame directly to the attached hardware Vulkan swapchain (`VkSwapchainKHR`)
+/// and presents it via `vkQueuePresentKHR`.
+///
+/// # Safety
+/// `engine_ptr` must be a valid pointer returned by `iguanodon_engine_create`.
+#[no_mangle]
+pub unsafe extern "C" fn iguanodon_render_and_present(
+    engine_ptr: *mut IguanodonTestHarness,
+    dt_sec: f32,
+    width: u32,
+    height: u32,
+) -> f32 {
+    if engine_ptr.is_null() || width == 0 || height == 0 {
+        return 0.0;
+    }
+    let harness = &mut *engine_ptr;
+    let w = width.min(MAX_FRAMEBUFFER_DIM);
+    let h = height.min(MAX_FRAMEBUFFER_DIM);
+    let sample = harness.render_and_present(dt_sec, w, h);
     sample.total_frame_ms
 }
 
 /// Renders a frame at `(fb_width, fb_height)` and copies the RGBA8888 output into `out_rgba_ptr`
-/// (used by Android `ANativeWindow_lock` / `Bitmap` and Desktop JVM surface blitting).
+/// (used by offscreen readback and Desktop JVM surface blitting).
 ///
 /// # Safety
 /// `engine_ptr` must be valid, and `out_rgba_ptr` must be valid for `fb_width * fb_height * 4` bytes.
@@ -1052,14 +1129,7 @@ pub unsafe extern "C" fn iguanodon_render_frame_rgba(
     let fb_width = fb_width.min(MAX_FRAMEBUFFER_DIM);
     let fb_height = fb_height.min(MAX_FRAMEBUFFER_DIM);
     let harness = &mut *engine_ptr;
-    harness.resize(fb_width as f32, fb_height as f32);
-    let sample = harness.app.render_benchmark_frame(
-        &mut harness.vk,
-        dt_sec,
-        fb_width,
-        fb_height,
-        &mut harness.framebuffer_rgba,
-    );
+    let sample = harness.render_frame_rgba(dt_sec, fb_width, fb_height);
     if !out_rgba_ptr.is_null() {
         if let Some(byte_len) = (fb_width as usize)
             .checked_mul(fb_height as usize)
@@ -1297,6 +1367,103 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     )
 }
 
+/// Attaches an `android.view.Surface` (`jobject`) directly to the hardware Vulkan `VkSwapchainKHR`
+/// via `ANativeWindow_fromSurface` (`libandroid.so`), or detaches the swapchain when `jsurface` is null.
+///
+/// # Safety
+/// `env` must be a valid `JNIEnv*` and `handle` a valid engine handle.
+#[no_mangle]
+pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nativeSetAndroidSurface(
+    env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+    handle: i64,
+    jsurface: *mut std::ffi::c_void,
+    width: i32,
+    height: i32,
+) -> u8 {
+    use std::sync::atomic::{AtomicPtr, Ordering};
+    static ACTIVE_ANW: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+    if handle == 0 {
+        return 0;
+    }
+    let harness = &mut *(handle as *mut IguanodonTestHarness);
+    harness.vk.detach_surface();
+
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    {
+        extern "C" {
+            fn dlopen(filename: *const i8, flags: i32) -> *mut std::ffi::c_void;
+            fn dlsym(
+                handle: *mut std::ffi::c_void,
+                symbol: *const i8,
+            ) -> *mut std::ffi::c_void;
+        }
+        let lib = dlopen(b"libandroid.so\0".as_ptr() as *const i8, 2);
+        if !lib.is_null() {
+            let prev_anw = ACTIVE_ANW.swap(std::ptr::null_mut(), Ordering::SeqCst);
+            if !prev_anw.is_null() {
+                let release_sym = dlsym(lib, b"ANativeWindow_release\0".as_ptr() as *const i8);
+                if !release_sym.is_null() {
+                    let release_fn: unsafe extern "C" fn(*mut std::ffi::c_void) =
+                        std::mem::transmute(release_sym);
+                    release_fn(prev_anw);
+                }
+            }
+            if jsurface.is_null() || width <= 0 || height <= 0 {
+                return 0;
+            }
+            let from_surface_sym = dlsym(
+                lib,
+                b"ANativeWindow_fromSurface\0".as_ptr() as *const i8,
+            );
+            if !from_surface_sym.is_null() {
+                let from_surface: unsafe extern "C" fn(
+                    *mut std::ffi::c_void,
+                    *mut std::ffi::c_void,
+                ) -> *mut std::ffi::c_void = std::mem::transmute(from_surface_sym);
+                let anw = from_surface(env, jsurface);
+                if !anw.is_null() {
+                    ACTIVE_ANW.store(anw, Ordering::SeqCst);
+                    let ok = iguanodon_attach_android_surface(
+                        harness,
+                        anw,
+                        width as u32,
+                        height as u32,
+                    );
+                    return if ok { 1 } else { 0 };
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Renders a frame directly to the attached hardware Vulkan swapchain (`VkSwapchainKHR`)
+/// and presents it via `vkQueuePresentKHR`.
+///
+/// # Safety
+/// `handle` must be a valid engine handle returned by `nativeCreate`.
+#[no_mangle]
+pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nativeRenderAndPresent(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+    handle: i64,
+    dt_sec: f32,
+    width: i32,
+    height: i32,
+) -> f32 {
+    if handle == 0 || width <= 0 || height <= 0 {
+        return 0.0;
+    }
+    iguanodon_render_and_present(
+        handle as *mut IguanodonTestHarness,
+        dt_sec,
+        width as u32,
+        height as u32,
+    )
+}
+
 /// Renders a frame and copies the resulting RGBA8888 pixels directly into an Android/JVM `byte[]` (`jbyteArray`).
 ///
 /// # Safety
@@ -1317,14 +1484,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     let harness = &mut *(handle as *mut IguanodonTestHarness);
     let w = (width as u32).min(MAX_FRAMEBUFFER_DIM);
     let h = (height as u32).min(MAX_FRAMEBUFFER_DIM);
-    harness.resize(w as f32, h as f32);
-    let sample = harness.app.render_benchmark_frame(
-        &mut harness.vk,
-        dt_sec,
-        w,
-        h,
-        &mut harness.framebuffer_rgba,
-    );
+    let sample = harness.render_frame_rgba(dt_sec, w, h);
     if !env.is_null() && !(*env).is_null() && !out_rgba_array.is_null() {
         let vtable = *env;
         let get_array_len: unsafe extern "C" fn(
