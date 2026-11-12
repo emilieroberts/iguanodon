@@ -613,7 +613,7 @@ pub fn try_run_interactive_window_with_mode(android_mode: bool) -> bool {
             }
 
             let frame_begin = Instant::now();
-            let dt = last_tick.elapsed().as_secs_f32().clamp(1.0 / 240.0, 0.05);
+            let dt = last_tick.elapsed().as_secs_f32().clamp(1.0 / 1000.0, 0.15);
             last_tick = frame_begin;
             needs_redraw = false;
 
@@ -639,16 +639,13 @@ pub fn try_run_interactive_window_with_mode(android_mode: bool) -> bool {
                 x_flush(dpy);
             }
 
-            let base_interval = harness.app.power_mode.target_frame_interval_sec();
-            let target_interval = if is_actively_interacting {
-                Duration::from_secs_f32(base_interval)
-            } else {
-                // Adaptive idle pacing: 24 FPS (41.6ms) for calm ambient shaders when stationary
-                Duration::from_secs_f32(base_interval.max(1.0 / 24.0))
-            };
-            let elapsed = frame_begin.elapsed();
-            if elapsed < target_interval {
-                std::thread::sleep(target_interval - elapsed);
+            let base_interval = harness.app.target_frame_interval_sec();
+            if base_interval > 0.0 {
+                let target_interval = Duration::from_secs_f32(base_interval);
+                let elapsed = frame_begin.elapsed();
+                if elapsed < target_interval {
+                    std::thread::sleep(target_interval - elapsed);
+                }
             }
         }
 

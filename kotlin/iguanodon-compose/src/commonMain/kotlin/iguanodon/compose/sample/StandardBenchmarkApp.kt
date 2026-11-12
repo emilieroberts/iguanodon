@@ -39,7 +39,9 @@ fun StandardBenchmarkApp() {
     var activeTheme by remember { mutableStateOf(IguanodonThemeId.Material3Expressive) }
     var activeMode by remember { mutableStateOf(IguanodonThemeMode.Dark) }
     var activePowerMode by remember { mutableStateOf(IguanodonPowerMode.Performance) }
+    var activeFrameRateLimit by remember { mutableStateOf(IguanodonFrameRateLimit.Fps120) }
     var activeRenderer by remember { mutableStateOf(IguanodonRendererBackend.Iguanodon) }
+    val effectiveFrameRateLimit = activeFrameRateLimit.effectiveForPowerMode(activePowerMode)
     var clicks by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("Filter 10,000 Vulkan items...") }
     var progress by remember { mutableStateOf(0.35f) }
@@ -49,7 +51,7 @@ fun StandardBenchmarkApp() {
     val mainSections: @Composable () -> Unit = {
         // Section 1: Labels, Buttons (>=48dp), Edit Text Entry, Progress Bars, Image, Animations
         Column {
-            Label("Clicks: $clicks | UI: ${activeRenderer.displayName} | Power: ${activePowerMode.displayName}")
+            Label("Clicks: $clicks | UI: ${activeRenderer.displayName} | Power: ${activePowerMode.displayName} | FPS Cap: ${effectiveFrameRateLimit.displayName}")
             Button(
                 label = "Primary Action (+Progress) [$clicks]",
                 nodeId = BenchNodeIds.PRIMARY_BTN,
@@ -78,7 +80,7 @@ fun StandardBenchmarkApp() {
             )
         }
 
-        // Section 2: Drag & Drop Source/Target, Scrollable Text, Right-Click / Long-Press Context Menu
+        // Section 2: Drag & Drop Source/Target, Framerate Limiter Radio Group, Scrollable Text, Right-Click / Long-Press Context Menu
         Column {
             Draggable(
                 payloadId = "Vulkan-Shader-Asset-01",
@@ -91,6 +93,15 @@ fun StandardBenchmarkApp() {
                 nodeId = BenchNodeIds.DRAGGABLE_CARD_B,
             ) {
                 Label("Drag Source B: M3 Token Pack #02")
+            }
+            Button(
+                label = "FPS Limit Radio Group: ${effectiveFrameRateLimit.displayName}",
+                nodeId = BenchNodeIds.FPS_LIMIT_RADIO_GROUP,
+            ) {
+                val allLimits = IguanodonFrameRateLimit.entries
+                val nextLimit = allLimits[(activeFrameRateLimit.ordinal + 1) % allLimits.size]
+                activeFrameRateLimit = nextLimit
+                session?.setFrameRateLimit(nextLimit)
             }
             DropTarget(
                 onDrop = { id -> droppedPayloads = droppedPayloads + id },

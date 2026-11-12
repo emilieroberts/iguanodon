@@ -109,12 +109,7 @@ class IguanodonDesktopWindow(
         var frameTimer: Timer? = null
         frameTimer = Timer(8) {
             val now = System.nanoTime()
-            val isActivelyInteracting = (now - lastInputNanos) < 300_000_000L
-            val targetDelay = if (isActivelyInteracting) {
-                session.targetFrameIntervalMs
-            } else {
-                session.targetFrameIntervalMs.coerceAtLeast(42)
-            }
+            val targetDelay = session.targetFrameIntervalMs
             if (frameTimer?.delay != targetDelay) {
                 frameTimer?.delay = targetDelay
             }
@@ -127,7 +122,7 @@ class IguanodonDesktopWindow(
                 argbInts = IntArray(w * h)
                 bufferedImage = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
             }
-            val dt = ((now - lastFrameNanos) / 1_000_000_000.0f).coerceIn(1f / 240f, 0.05f)
+            val dt = ((now - lastFrameNanos) / 1_000_000_000.0f).coerceIn(1f / 1000f, 0.15f)
             lastFrameNanos = now
             compositionHost.doFrame(now)
             session.renderFrame(dt, rgbaBytes)

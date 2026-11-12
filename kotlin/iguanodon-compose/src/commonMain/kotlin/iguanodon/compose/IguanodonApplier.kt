@@ -49,6 +49,7 @@ object FfiOpcodes {
     const val SET_THEME_MODE: Byte = 0x0B
     const val SET_POWER_MODE: Byte = 0x0C
     const val SET_RENDERER_BACKEND: Byte = 0x0D
+    const val SET_FRAME_RATE_LIMIT: Byte = 0x0E
 
     // Pure `compose.runtime` Applier Scene-Tree Opcodes (`0x10..0x1A`)
     const val INSERT_CHILD: Byte = 0x10
@@ -81,6 +82,7 @@ object ReverseEventTypes {
     const val THEME_MODE_CHANGED: Int = 11
     const val POWER_MODE_CHANGED: Int = 12
     const val RENDERER_BACKEND_CHANGED: Int = 13
+    const val FRAME_RATE_LIMIT_CHANGED: Int = 14
     const val RECORD_BYTE_SIZE: Int = 32
 }
 
@@ -145,6 +147,7 @@ object BenchNodeIds {
     const val ANIMATED_SHADER_CARD: Int = 90
     const val PERF_OVERLAY_HUD: Int = 3
     const val ANIM_SPEED_SLIDER: Int = 95
+    const val FPS_LIMIT_RADIO_GROUP: Int = 96
 }
 
 enum class IguanodonThemeId(val code: Byte, val displayName: String) {
@@ -176,6 +179,44 @@ enum class IguanodonPowerMode(
     ;
 
     fun toggle(): IguanodonPowerMode = if (this == Performance) PowerSaving else Performance
+}
+
+/**
+ * User-selectable framerate limiter preset (`15`, `30`, `45`, `60`, `75`, `90`, `120` FPS, or `Unlimited`).
+ * In `IguanodonPowerMode.PowerSaving` (Eco mode), the effective framerate is capped at `30 FPS`.
+ */
+enum class IguanodonFrameRateLimit(
+    val code: Byte,
+    val displayName: String,
+    val targetFps: Int,
+) {
+    Fps15(0, "15 FPS", 15),
+    Fps30(1, "30 FPS", 30),
+    Fps45(2, "45 FPS", 45),
+    Fps60(3, "60 FPS", 60),
+    Fps75(4, "75 FPS", 75),
+    Fps90(5, "90 FPS", 90),
+    Fps120(6, "120 FPS", 120),
+    Unlimited(7, "Unlimited", 0),
+    ;
+
+    fun effectiveForPowerMode(powerMode: IguanodonPowerMode): IguanodonFrameRateLimit =
+        if (powerMode == IguanodonPowerMode.PowerSaving) {
+            if (this == Fps15) Fps15 else Fps30
+        } else {
+            this
+        }
+
+    val frameIntervalNanos: Long
+        get() = if (targetFps <= 0) 0L else 1_000_000_000L / targetFps.toLong()
+
+    val frameIntervalMs: Long
+        get() = if (targetFps <= 0) 0L else (1000L / targetFps.toLong()).coerceAtLeast(1L)
+
+    companion object {
+        fun fromCode(code: Int): IguanodonFrameRateLimit =
+            entries.firstOrNull { it.code.toInt() == code } ?: Unlimited
+    }
 }
 
 /**
@@ -212,6 +253,11 @@ class ByteBufferCommandEncoder {
     fun encodeSetRendererBackend(backend: IguanodonRendererBackend) {
         buffer.add(FfiOpcodes.SET_RENDERER_BACKEND)
         buffer.add(backend.code)
+    }
+
+    fun encodeSetFrameRateLimit(limit: IguanodonFrameRateLimit) {
+        buffer.add(FfiOpcodes.SET_FRAME_RATE_LIMIT)
+        buffer.add(limit.code)
     }
 
     fun encodeSetLabelText(nodeId: Int, text: String) {

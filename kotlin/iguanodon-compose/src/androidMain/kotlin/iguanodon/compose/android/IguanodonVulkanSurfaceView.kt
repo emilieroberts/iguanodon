@@ -272,12 +272,13 @@ class IguanodonVulkanSurfaceView(
     override fun doFrame(frameTimeNanos: Long) {
         if (!running) return
         val elapsedNanos = frameTimeNanos - lastFrameNanos
-        if (session.powerMode == IguanodonPowerMode.PowerSaving && elapsedNanos in 1L..32_500_000L) {
-            // In Power-Saving mode (30 FPS), skip intermediate 60Hz/90Hz/120Hz Choreographer vsync ticks
+        val minIntervalNanos = session.targetFrameIntervalNanos
+        // Subtract a 1.5ms vsync jitter tolerance so 60Hz/90Hz/120Hz Choreographer ticks don't skip an extra cycle
+        if (minIntervalNanos > 0L && elapsedNanos in 1L until (minIntervalNanos - 1_500_000L)) {
             Choreographer.getInstance().postFrameCallback(this)
             return
         }
-        val dt = (elapsedNanos / 1_000_000_000.0f).coerceIn(1f / 240f, 0.05f)
+        val dt = (elapsedNanos / 1_000_000_000.0f).coerceIn(1f / 1000f, 0.15f)
         lastFrameNanos = frameTimeNanos
 
         if (width > 0 && height > 0) {

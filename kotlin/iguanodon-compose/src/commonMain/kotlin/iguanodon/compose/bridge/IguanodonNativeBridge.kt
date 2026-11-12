@@ -18,6 +18,7 @@ package iguanodon.compose.bridge
 
 import iguanodon.compose.ByteBufferCommandEncoder
 import iguanodon.compose.IguanodonEventMask
+import iguanodon.compose.IguanodonFrameRateLimit
 import iguanodon.compose.IguanodonModifier
 import iguanodon.compose.IguanodonNode
 import iguanodon.compose.IguanodonPowerMode
@@ -189,20 +190,29 @@ class IguanodonSession(
         private set
     var powerMode: IguanodonPowerMode = IguanodonPowerMode.Performance
         private set
+    var frameRateLimit: IguanodonFrameRateLimit = IguanodonFrameRateLimit.Fps120
+        private set
     var rendererBackend: IguanodonRendererBackend = IguanodonRendererBackend.Iguanodon
         private set
     var onThemeModeChanged: ((IguanodonThemeMode) -> Unit)? = null
     var onPowerModeChanged: ((IguanodonPowerMode) -> Unit)? = null
+    var onFrameRateLimitChanged: ((IguanodonFrameRateLimit) -> Unit)? = null
     var onRendererBackendChanged: ((IguanodonRendererBackend) -> Unit)? = null
 
     val isPortrait: Boolean
         get() = viewportWidth < viewportHeight
 
+    val effectiveFrameRateLimit: IguanodonFrameRateLimit
+        get() = frameRateLimit.effectiveForPowerMode(powerMode)
+
     val targetFps: Int
-        get() = powerMode.targetFps
+        get() = effectiveFrameRateLimit.targetFps
 
     val targetFrameIntervalMs: Int
-        get() = powerMode.frameIntervalMs
+        get() = effectiveFrameRateLimit.frameIntervalMs.toInt()
+
+    val targetFrameIntervalNanos: Long
+        get() = effectiveFrameRateLimit.frameIntervalNanos
 
     fun allocateNodeId(): Long = nextDynamicNodeId++
 
@@ -308,6 +318,13 @@ class IguanodonSession(
         val next = powerMode.toggle()
         setPowerMode(next)
         return next
+    }
+
+    fun setFrameRateLimit(limit: IguanodonFrameRateLimit) {
+        frameRateLimit = limit
+        encoder.encodeSetFrameRateLimit(limit)
+        flushPendingCommands()
+        onFrameRateLimitChanged?.invoke(limit)
     }
 
     fun setRendererBackend(backend: IguanodonRendererBackend) {
@@ -449,6 +466,13 @@ class IguanodonSession(
                         rendererBackend = nextBackend
                     }
                     onRendererBackendChanged?.invoke(nextBackend)
+                }
+                ReverseEventTypes.FRAME_RATE_LIMIT_CHANGED -> {
+                    val nextLimit = IguanodonFrameRateLimit.fromCode(auxU32)
+                    if (frameRateLimit != nextLimit) {
+                        frameRateLimit = nextLimit
+                    }
+                    onFrameRateLimitChanged?.invoke(nextLimit)
                 }
             }
             offset += ReverseEventTypes.RECORD_BYTE_SIZE

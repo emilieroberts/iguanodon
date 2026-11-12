@@ -120,6 +120,144 @@ impl PowerMode {
     }
 }
 
+/// User-selectable framerate limiter preset (`15`, `30`, `45`, `60`, `75`, `90`, `120` FPS, or `Unlimited`).
+/// When [`PowerMode::PowerSaving`] (Eco mode) is active, the effective framerate is capped at `30 FPS`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FrameRateLimit {
+    Fps15 = 0,
+    Fps30 = 1,
+    Fps45 = 2,
+    Fps60 = 3,
+    Fps75 = 4,
+    Fps90 = 5,
+    Fps120 = 6,
+    Unlimited = 7,
+}
+
+impl FrameRateLimit {
+    pub const ALL: [Self; 8] = [
+        Self::Fps15,
+        Self::Fps30,
+        Self::Fps45,
+        Self::Fps60,
+        Self::Fps75,
+        Self::Fps90,
+        Self::Fps120,
+        Self::Unlimited,
+    ];
+
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Fps15,
+            1 => Self::Fps30,
+            2 => Self::Fps45,
+            3 => Self::Fps60,
+            4 => Self::Fps75,
+            5 => Self::Fps90,
+            6 => Self::Fps120,
+            _ => Self::Unlimited,
+        }
+    }
+
+    pub fn from_fps(fps: u32) -> Self {
+        match fps {
+            0 => Self::Unlimited,
+            1..=22 => Self::Fps15,
+            23..=37 => Self::Fps30,
+            38..=52 => Self::Fps45,
+            53..=67 => Self::Fps60,
+            68..=82 => Self::Fps75,
+            83..=105 => Self::Fps90,
+            106..=240 => Self::Fps120,
+            _ => Self::Unlimited,
+        }
+    }
+
+    /// Returns `Some(fps)` for capped presets, or `None` for `Unlimited`.
+    pub fn target_fps(self) -> Option<u32> {
+        match self {
+            Self::Fps15 => Some(15),
+            Self::Fps30 => Some(30),
+            Self::Fps45 => Some(45),
+            Self::Fps60 => Some(60),
+            Self::Fps75 => Some(75),
+            Self::Fps90 => Some(90),
+            Self::Fps120 => Some(120),
+            Self::Unlimited => None,
+        }
+    }
+
+    /// Returns the numeric FPS cap, or `0` when `Unlimited`.
+    pub fn target_fps_or_zero(self) -> u32 {
+        self.target_fps().unwrap_or(0)
+    }
+
+    /// Target frame interval in seconds (`0.0` when `Unlimited`).
+    pub fn frame_interval_sec(self) -> f32 {
+        match self.target_fps() {
+            Some(fps) => 1.0 / (fps as f32),
+            None => 0.0,
+        }
+    }
+
+    /// Capped at 30 FPS when `power_mode == PowerMode::PowerSaving`.
+    pub fn effective_for_power_mode(self, power_mode: PowerMode) -> Self {
+        if power_mode == PowerMode::PowerSaving {
+            match self {
+                Self::Fps15 => Self::Fps15,
+                _ => Self::Fps30,
+            }
+        } else {
+            self
+        }
+    }
+
+    pub fn next(self) -> Self {
+        let idx = (self as usize + 1) % Self::ALL.len();
+        Self::ALL[idx]
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Fps15 => "15",
+            Self::Fps30 => "30",
+            Self::Fps45 => "45",
+            Self::Fps60 => "60",
+            Self::Fps75 => "75",
+            Self::Fps90 => "90",
+            Self::Fps120 => "120",
+            Self::Unlimited => "Unlim",
+        }
+    }
+
+    pub fn radio_label(self) -> &'static str {
+        match self {
+            Self::Fps15 => "15fps",
+            Self::Fps30 => "30fps",
+            Self::Fps45 => "45fps",
+            Self::Fps60 => "60fps",
+            Self::Fps75 => "75fps",
+            Self::Fps90 => "90fps",
+            Self::Fps120 => "120fps",
+            Self::Unlimited => "Unlim",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Fps15 => "15 FPS",
+            Self::Fps30 => "30 FPS",
+            Self::Fps45 => "45 FPS",
+            Self::Fps60 => "60 FPS",
+            Self::Fps75 => "75 FPS",
+            Self::Fps90 => "90 FPS",
+            Self::Fps120 => "120 FPS",
+            Self::Unlimited => "Unlimited",
+        }
+    }
+}
+
 /// Active UI renderer backend in the test/benchmark application (`Iguanodon` default vs `ComposeUi` reference).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -207,9 +345,10 @@ pub mod bench_nodes {
     // 9. Image Widget
     pub const SHOWCASE_IMAGE: NodeId = NodeId::from_raw(80);
 
-    // 10. Animated Spring & Shader Playground Card + Animation Speed Slider
+    // 10. Animated Spring & Shader Playground Card + Animation Speed Slider + Framerate Limiter Radio Group
     pub const ANIMATED_SHADER_CARD: NodeId = NodeId::from_raw(90);
     pub const ANIM_SPEED_SLIDER: NodeId = NodeId::from_raw(95);
+    pub const FPS_LIMIT_RADIO_GROUP: NodeId = NodeId::from_raw(96);
 }
 
 /// Complete state & scene controller for the **Standard Benchmark Sample App**.
@@ -222,6 +361,9 @@ pub struct StandardBenchmarkApp {
     pub active_theme_id: ThemeId,
     pub active_theme_mode: ThemeMode,
     pub power_mode: PowerMode,
+    /// User-selected framerate limit (`15`, `30`, `45`, `60`, `75`, `90`, `120` FPS, or `Unlimited`).
+    /// When `power_mode == PowerMode::PowerSaving` (Eco mode), effective framerate is capped at `30 FPS`.
+    pub frame_rate_limit: FrameRateLimit,
     pub renderer_backend: RendererBackend,
     pub current_theme: ThemeDescriptor,
     pub target_theme: ThemeDescriptor,
@@ -321,6 +463,7 @@ impl StandardBenchmarkApp {
             active_theme_id: ThemeId::Material3Expressive,
             active_theme_mode: ThemeMode::Dark,
             power_mode: PowerMode::Performance,
+            frame_rate_limit: FrameRateLimit::Fps120,
             renderer_backend: RendererBackend::Iguanodon,
             current_theme: theme,
             target_theme: theme,
@@ -430,16 +573,61 @@ impl StandardBenchmarkApp {
         self.set_theme(next);
     }
 
-    /// Sets the engine power mode (`PowerMode::Performance` at 120 FPS vs `PowerMode::PowerSaving` at 30 FPS with shader optimizations).
+    /// Sets the engine power mode (`PowerMode::Performance` vs `PowerMode::PowerSaving` capped at 30 FPS).
     pub fn set_power_mode(&mut self, mode: PowerMode) {
         self.power_mode = mode;
-        self.status_label_text = format!("Power Mode: {}", mode.name());
+        self.telemetry.history.clear();
+        let eff = self.effective_frame_rate_limit();
+        self.status_label_text = format!(
+            "Power Mode: {} (Effective Limit: {})",
+            mode.name(),
+            eff.display_name()
+        );
     }
 
     /// Toggles between `PowerMode::Performance` (120 FPS) and `PowerMode::PowerSaving` (30 FPS).
     pub fn toggle_power_mode(&mut self) {
         let next = self.power_mode.toggle();
         self.set_power_mode(next);
+    }
+
+    /// Sets the user-selected framerate limit (`15`, `30`, `45`, `60`, `75`, `90`, `120` FPS, or `Unlimited`).
+    /// In `PowerMode::PowerSaving` (Eco mode), the effective framerate is capped at `30 FPS`.
+    pub fn set_frame_rate_limit(&mut self, limit: FrameRateLimit) {
+        self.frame_rate_limit = limit;
+        self.telemetry.history.clear();
+        let eff = self.effective_frame_rate_limit();
+        if eff != limit {
+            self.status_label_text = format!(
+                "FPS Limit: {} (Eco Cap, Selected: {})",
+                eff.display_name(),
+                limit.display_name()
+            );
+        } else {
+            self.status_label_text = format!("FPS Limit: {}", eff.display_name());
+        }
+    }
+
+    /// Cycles to the next [`FrameRateLimit`] preset.
+    pub fn cycle_frame_rate_limit(&mut self) {
+        let next = self.frame_rate_limit.next();
+        self.set_frame_rate_limit(next);
+    }
+
+    /// Returns the effective [`FrameRateLimit`], capped at `30 FPS` when `self.power_mode == PowerMode::PowerSaving`.
+    pub fn effective_frame_rate_limit(&self) -> FrameRateLimit {
+        self.frame_rate_limit
+            .effective_for_power_mode(self.power_mode)
+    }
+
+    /// Returns the effective target FPS (`Some(15..=120)`) or `None` when `Unlimited` in `PowerMode::Performance`.
+    pub fn effective_target_fps(&self) -> Option<u32> {
+        self.effective_frame_rate_limit().target_fps()
+    }
+
+    /// Returns the target wall-clock frame interval in seconds (`0.0` when `Unlimited`).
+    pub fn target_frame_interval_sec(&self) -> f32 {
+        self.effective_frame_rate_limit().frame_interval_sec()
     }
 
     /// Sets the active renderer backend (`RendererBackend::Iguanodon` default vs `RendererBackend::ComposeUi`).
@@ -711,7 +899,7 @@ impl StandardBenchmarkApp {
                 LayoutStyle {
                     direction: FlexDirection::Column,
                     width: Dimension::Fill(1.0),
-                    height: Dimension::Fill(1.22),
+                    height: Dimension::Fill(1.38),
                     padding: 8.0,
                     gap: 7.0,
                     ..Default::default()
@@ -742,10 +930,18 @@ impl StandardBenchmarkApp {
                 },
             );
             self.layout.set_style(
+                FPS_LIMIT_RADIO_GROUP,
+                LayoutStyle {
+                    width: Dimension::Fill(1.0),
+                    height: Dimension::Px(56.0),
+                    ..Default::default()
+                },
+            );
+            self.layout.set_style(
                 DROP_TARGET_BUCKET,
                 LayoutStyle {
                     width: Dimension::Fill(1.0),
-                    height: Dimension::Fill(1.0),
+                    height: Dimension::Fill(0.95),
                     ..Default::default()
                 },
             );
@@ -753,7 +949,7 @@ impl StandardBenchmarkApp {
                 SCROLLABLE_TEXT,
                 LayoutStyle {
                     width: Dimension::Fill(1.0),
-                    height: Dimension::Fill(1.25),
+                    height: Dimension::Fill(1.15),
                     ..Default::default()
                 },
             );
@@ -761,7 +957,7 @@ impl StandardBenchmarkApp {
                 CONTEXT_MENU_REGION,
                 LayoutStyle {
                     width: Dimension::Fill(1.0),
-                    height: Dimension::Fill(0.95),
+                    height: Dimension::Fill(0.90),
                     ..Default::default()
                 },
             );
@@ -771,6 +967,7 @@ impl StandardBenchmarkApp {
                     DRAGGABLE_CARD_A,
                     DRAGGABLE_CARD_B,
                     ANIM_SPEED_SLIDER,
+                    FPS_LIMIT_RADIO_GROUP,
                     DROP_TARGET_BUCKET,
                     SCROLLABLE_TEXT,
                     CONTEXT_MENU_REGION,
@@ -993,8 +1190,9 @@ impl StandardBenchmarkApp {
                 ],
             );
 
-            // Center Column: Draggable cards, Animation Speed Slider, Drop Target Bucket, Scrollable Text, Context Menu Region (all >= 48dp)
+            // Center Column: Draggable cards, Animation Speed Slider, Framerate Radio Group, Drop Target Bucket, Scrollable Text, Context Menu Region (all >= 48dp)
             let card_h = (50.0 * scale_v).clamp(MIN_TOUCH_TARGET_DP, 60.0);
+            let fps_group_h = (58.0 * scale_v).clamp(52.0, 68.0);
             self.layout.set_style(
                 MID_COL,
                 LayoutStyle {
@@ -1031,10 +1229,18 @@ impl StandardBenchmarkApp {
                 },
             );
             self.layout.set_style(
+                FPS_LIMIT_RADIO_GROUP,
+                LayoutStyle {
+                    width: Dimension::Fill(1.0),
+                    height: Dimension::Px(fps_group_h),
+                    ..Default::default()
+                },
+            );
+            self.layout.set_style(
                 DROP_TARGET_BUCKET,
                 LayoutStyle {
                     width: Dimension::Fill(1.0),
-                    height: Dimension::Fill(0.90),
+                    height: Dimension::Fill(0.95),
                     ..Default::default()
                 },
             );
@@ -1042,7 +1248,7 @@ impl StandardBenchmarkApp {
                 SCROLLABLE_TEXT,
                 LayoutStyle {
                     width: Dimension::Fill(1.0),
-                    height: Dimension::Fill(1.30),
+                    height: Dimension::Fill(1.15),
                     ..Default::default()
                 },
             );
@@ -1050,7 +1256,7 @@ impl StandardBenchmarkApp {
                 CONTEXT_MENU_REGION,
                 LayoutStyle {
                     width: Dimension::Fill(1.0),
-                    height: Dimension::Fill(0.75),
+                    height: Dimension::Fill(0.90),
                     ..Default::default()
                 },
             );
@@ -1060,6 +1266,7 @@ impl StandardBenchmarkApp {
                     DRAGGABLE_CARD_A,
                     DRAGGABLE_CARD_B,
                     ANIM_SPEED_SLIDER,
+                    FPS_LIMIT_RADIO_GROUP,
                     DROP_TARGET_BUCKET,
                     SCROLLABLE_TEXT,
                     CONTEXT_MENU_REGION,
@@ -1678,6 +1885,112 @@ impl StandardBenchmarkApp {
             });
         }
 
+        // Framerate Limiter Radio Group (`FPS_LIMIT_RADIO_GROUP`): 8 radio buttons (15, 30, 45, 60, 75, 90, 120, Unlimited)
+        if let Some(r) = self.layout.bounds(FPS_LIMIT_RADIO_GROUP) {
+            out.push(SdfPrimitiveInstance {
+                rect: r.to_array(),
+                corner_radii: [th.shapes.radius_md; 4],
+                clip_rect: full_clip,
+                fill_color_start: th.colors.surface_container.with_alpha(elem_alpha).to_array(),
+                fill_color_end: th.colors.surface.with_alpha(elem_alpha).to_array(),
+                border_color: th.colors.accent_glow.to_array(),
+                shadow_color: [0.0, 0.0, 0.0, 0.35],
+                params: [
+                    th.shapes.border_width.max(1.5),
+                    if is_eco { 2.0 } else { 6.0 },
+                    p,
+                    pack_material_and_border(
+                        subtle_glass_mat,
+                        filter_border(BorderShaderEffect::GentleSmokeBorder),
+                    ),
+                ],
+            });
+
+            let pad_x = 6.0_f32;
+            let pad_y = 4.0_f32;
+            let cell_w = ((r.width - pad_x * 2.0) / 4.0).max(20.0);
+            let cell_h = ((r.height - pad_y * 2.0) / 2.0).max(16.0);
+            let effective_limit = self.effective_frame_rate_limit();
+
+            for (idx, preset) in FrameRateLimit::ALL.iter().copied().enumerate() {
+                let col = idx % 4;
+                let row = idx / 4;
+                let cx = r.x + pad_x + (col as f32) * cell_w;
+                let cy = r.y + pad_y + (row as f32) * cell_h;
+                let is_effective = preset == effective_limit;
+                let is_selected = preset == self.frame_rate_limit;
+
+                // Option pill background
+                if is_effective || is_selected {
+                    let pill_fill_start = if is_effective {
+                        th.colors.primary_container.with_alpha(btn_alpha).to_array()
+                    } else {
+                        th.colors.surface_bright.with_alpha(elem_alpha * 0.7).to_array()
+                    };
+                    let pill_fill_end = if is_effective {
+                        th.colors.primary.with_alpha(elem_alpha).to_array()
+                    } else {
+                        th.colors.surface_container.with_alpha(elem_alpha * 0.7).to_array()
+                    };
+                    let pill_border = if is_effective {
+                        th.colors.accent_glow.to_array()
+                    } else {
+                        th.colors.outline.to_array()
+                    };
+                    out.push(SdfPrimitiveInstance {
+                        rect: [cx + 1.5, cy + 1.5, (cell_w - 3.0).max(12.0), (cell_h - 3.0).max(12.0)],
+                        corner_radii: [6.0; 4],
+                        clip_rect: r.to_array(),
+                        fill_color_start: pill_fill_start,
+                        fill_color_end: pill_fill_end,
+                        border_color: pill_border,
+                        shadow_color: [0.0; 4],
+                        params: [1.0, 0.0, p, ShaderMaterialId::StandardSdf as u32 as f32],
+                    });
+                }
+
+                // Radio outer ring (circular SDF with p = 2.0)
+                let ring_d = 12.0_f32;
+                let ring_x = cx + 5.0;
+                let ring_y = cy + (cell_h - ring_d) * 0.5;
+                let ring_border_col = if is_effective {
+                    th.colors.accent_glow.to_array()
+                } else {
+                    th.colors.outline.to_array()
+                };
+                out.push(SdfPrimitiveInstance {
+                    rect: [ring_x, ring_y, ring_d, ring_d],
+                    corner_radii: [ring_d * 0.5; 4],
+                    clip_rect: r.to_array(),
+                    fill_color_start: th.colors.surface.with_alpha(elem_alpha * 0.85).to_array(),
+                    fill_color_end: th.colors.surface.with_alpha(elem_alpha * 0.85).to_array(),
+                    border_color: ring_border_col,
+                    shadow_color: [0.0; 4],
+                    params: [1.5, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
+                });
+
+                // Radio inner active dot
+                if is_effective || is_selected {
+                    let dot_d = 6.0_f32;
+                    let dot_col = if is_effective {
+                        th.colors.accent_glow.to_array()
+                    } else {
+                        th.colors.secondary.with_alpha(0.75).to_array()
+                    };
+                    out.push(SdfPrimitiveInstance {
+                        rect: [ring_x + 3.0, ring_y + 3.0, dot_d, dot_d],
+                        corner_radii: [dot_d * 0.5; 4],
+                        clip_rect: r.to_array(),
+                        fill_color_start: dot_col,
+                        fill_color_end: dot_col,
+                        border_color: [0.0; 4],
+                        shadow_color: [0.0; 4],
+                        params: [0.0, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
+                    });
+                }
+            }
+        }
+
         // 7. Edit Text Entry (`TextField`) + Blinking Caret
         if let Some(r) = self.layout.bounds(EDIT_TEXT_FIELD) {
             let border_c = if self.text_field.focused {
@@ -2204,6 +2517,38 @@ impl StandardBenchmarkApp {
                 false,
             );
         }
+        if let Some(r) = self.layout.bounds(FPS_LIMIT_RADIO_GROUP) {
+            let pad_x = 6.0_f32;
+            let pad_y = 4.0_f32;
+            let cell_w = ((r.width - pad_x * 2.0) / 4.0).max(20.0);
+            let cell_h = ((r.height - pad_y * 2.0) / 2.0).max(16.0);
+            let effective_limit = self.effective_frame_rate_limit();
+            for (idx, preset) in FrameRateLimit::ALL.iter().copied().enumerate() {
+                let col = idx % 4;
+                let row = idx / 4;
+                let cx = r.x + pad_x + (col as f32) * cell_w;
+                let cy = r.y + pad_y + (row as f32) * cell_h;
+                let lbl = if cell_w >= 82.0 {
+                    preset.radio_label()
+                } else {
+                    preset.short_label()
+                };
+                let txt_col = if preset == effective_limit {
+                    accent
+                } else {
+                    on_surf
+                };
+                let cell_clip = Rect::new(cx, cy, cell_w, cell_h).intersect(&r);
+                push_gpu_text_glyphs(
+                    out,
+                    Point::new(cx + 20.0, cy + (cell_h - 21.0) * 0.5),
+                    lbl,
+                    txt_col,
+                    cell_clip,
+                    false,
+                );
+            }
+        }
         if let Some(r) = self.layout.bounds(DROP_TARGET_BUCKET) {
             let label = format!("Glass + Smoke Border (Dropped: {})", self.dropped_items.len());
             push_gpu_text_glyphs(
@@ -2651,6 +2996,39 @@ impl StandardBenchmarkApp {
                 r,
             );
         }
+        if let Some(r) = self.layout.bounds(FPS_LIMIT_RADIO_GROUP) {
+            let pad_x = 6.0_f32;
+            let pad_y = 4.0_f32;
+            let cell_w = ((r.width - pad_x * 2.0) / 4.0).max(20.0);
+            let cell_h = ((r.height - pad_y * 2.0) / 2.0).max(16.0);
+            let effective_limit = self.effective_frame_rate_limit();
+            for (idx, preset) in FrameRateLimit::ALL.iter().copied().enumerate() {
+                let col = idx % 4;
+                let row = idx / 4;
+                let cx = r.x + pad_x + (col as f32) * cell_w;
+                let cy = r.y + pad_y + (row as f32) * cell_h;
+                let lbl = if cell_w >= 82.0 {
+                    preset.radio_label()
+                } else {
+                    preset.short_label()
+                };
+                let txt_col = if preset == effective_limit {
+                    accent
+                } else {
+                    on_surf
+                };
+                let cell_clip = Rect::new(cx, cy, cell_w, cell_h).intersect(&r);
+                draw_text_rgba(
+                    fb_rgba,
+                    fb_w,
+                    fb_h,
+                    Point::new(cx + 20.0, cy + (cell_h - 21.0) * 0.5),
+                    lbl,
+                    txt_col,
+                    cell_clip,
+                );
+            }
+        }
         if let Some(r) = self.layout.bounds(DROP_TARGET_BUCKET) {
             let label = format!("Glass + Smoke Border (Dropped: {})", self.dropped_items.len());
             draw_text_rgba(
@@ -2817,6 +3195,7 @@ pub enum ReverseEventType {
     ThemeModeChanged = 11,
     PowerModeChanged = 12,
     RendererBackendChanged = 13,
+    FrameRateLimitChanged = 14,
 }
 
 /// Fixed 32-byte binary reverse event record queued for Kotlin's `iguanodon_engine_poll_events`.
@@ -2866,6 +3245,7 @@ impl ReverseUiEvent {
             11 => ReverseEventType::ThemeModeChanged,
             12 => ReverseEventType::PowerModeChanged,
             13 => ReverseEventType::RendererBackendChanged,
+            14 => ReverseEventType::FrameRateLimitChanged,
             _ => return None,
         };
         let flags = b[1];
@@ -3475,6 +3855,22 @@ impl IguanodonTestHarness {
         }
     }
 
+    /// Selects a framerate limit preset and emits `ReverseEventType::FrameRateLimitChanged`.
+    pub fn select_frame_rate_limit(&mut self, limit: FrameRateLimit) {
+        self.app.set_frame_rate_limit(limit);
+        let eff_fps = self.app.effective_frame_rate_limit().target_fps_or_zero();
+        self.push_reverse_event(ReverseUiEvent {
+            event_type: ReverseEventType::FrameRateLimitChanged,
+            flags: 0,
+            aux_u32: limit as u32,
+            node_id: bench_nodes::FPS_LIMIT_RADIO_GROUP.index as u64,
+            f0: eff_fps as f32,
+            f1: 0.0,
+            f2: 0.0,
+            f3: 0.0,
+        });
+    }
+
     pub fn node_center(&self, node: NodeId) -> Point {
         let r = self
             .app
@@ -3533,12 +3929,13 @@ impl IguanodonTestHarness {
             POWER_BTN => {
                 self.app.toggle_power_mode();
                 let pwr_val = self.app.power_mode as u32;
+                let eff_fps = self.app.effective_frame_rate_limit().target_fps_or_zero();
                 self.push_reverse_event(ReverseUiEvent {
                     event_type: ReverseEventType::PowerModeChanged,
                     flags: 0,
                     aux_u32: pwr_val,
                     node_id: 0,
-                    f0: self.app.power_mode.target_fps() as f32,
+                    f0: eff_fps as f32,
                     f1: 0.0,
                     f2: 0.0,
                     f3: 0.0,
@@ -3573,6 +3970,10 @@ impl IguanodonTestHarness {
                     0.25
                 };
                 self.app.set_animation_speed(next);
+            }
+            FPS_LIMIT_RADIO_GROUP => {
+                let next = self.app.frame_rate_limit.next();
+                self.select_frame_rate_limit(next);
             }
             ANIMATED_SHADER_CARD => {
                 self.app.showcase_shader_idx =
@@ -4045,6 +4446,30 @@ impl IguanodonTestHarness {
                     self.active_slider_drag = true;
                     self.update_speed_slider_from_x(pt.x);
                 }
+                FPS_LIMIT_RADIO_GROUP => {
+                    if let Some(r) = self.app.layout.bounds(FPS_LIMIT_RADIO_GROUP) {
+                        let pad_x = 6.0_f32;
+                        let pad_y = 4.0_f32;
+                        let inner_w = (r.width - pad_x * 2.0).max(1.0);
+                        let inner_h = (r.height - pad_y * 2.0).max(1.0);
+                        let col = (((pt.x - (r.x + pad_x)) / (inner_w / 4.0)).floor() as isize)
+                            .clamp(0, 3) as usize;
+                        let row = (((pt.y - (r.y + pad_y)) / (inner_h / 2.0)).floor() as isize)
+                            .clamp(0, 1) as usize;
+                        let idx = (row * 4 + col).min(FrameRateLimit::ALL.len() - 1);
+                        self.select_frame_rate_limit(FrameRateLimit::ALL[idx]);
+                        self.push_reverse_event(ReverseUiEvent {
+                            event_type: ReverseEventType::Click,
+                            flags: 0,
+                            aux_u32: idx as u32,
+                            node_id: FPS_LIMIT_RADIO_GROUP.index as u64,
+                            f0: pt.x,
+                            f1: pt.y,
+                            f2: 0.0,
+                            f3: 0.0,
+                        });
+                    }
+                }
                 other => self.click_node(other),
             }
         }
@@ -4145,7 +4570,14 @@ impl IguanodonTestHarness {
             height,
         );
 
-        let total_frame_ms = frame_start.elapsed().as_secs_f32() * 1_000.0;
+        let work_ms = frame_start.elapsed().as_secs_f32() * 1_000.0;
+        let paced_interval_ms = self.app.target_frame_interval_sec() * 1_000.0;
+        let dt_ms = if dt > 0.0005 && dt < 0.25 {
+            dt * 1_000.0
+        } else {
+            work_ms
+        };
+        let total_frame_ms = work_ms.max(paced_interval_ms).max(dt_ms);
         let (gpu_execution_us, draw_calls) = if let Some(vk_stats) = vk_stats_opt {
             self.app.telemetry.vram_allocated_bytes = vk_stats.vram_allocated_bytes;
             self.app.telemetry.gpu_device_name = vk_stats.device_name;
@@ -4275,6 +4707,7 @@ mod tests {
                 DRAGGABLE_CARD_A,
                 DRAGGABLE_CARD_B,
                 ANIM_SPEED_SLIDER,
+                FPS_LIMIT_RADIO_GROUP,
                 DROP_TARGET_BUCKET,
                 SHOWCASE_IMAGE,
                 ANIMATED_SHADER_CARD,
@@ -4560,5 +4993,70 @@ mod tests {
         // Toggle back to Iguanodon (default)
         harness.click_node(RENDERER_BTN);
         assert_eq!(harness.app.renderer_backend, RendererBackend::Iguanodon);
+    }
+
+    #[test]
+    fn test_framerate_limiter_radio_buttons_and_eco_30fps_cap() {
+        let mut harness = IguanodonTestHarness::new(1280.0, 800.0);
+        assert_eq!(harness.app.frame_rate_limit, FrameRateLimit::Fps120);
+        assert_eq!(harness.app.effective_frame_rate_limit(), FrameRateLimit::Fps120);
+        assert_eq!(harness.app.effective_target_fps(), Some(120));
+
+        // Click each of the 8 radio buttons inside FPS_LIMIT_RADIO_GROUP (2 rows x 4 cols)
+        let r = harness.app.layout.bounds(FPS_LIMIT_RADIO_GROUP).unwrap();
+        let pad_x = 6.0_f32;
+        let pad_y = 4.0_f32;
+        let cell_w = (r.width - pad_x * 2.0) / 4.0;
+        let cell_h = (r.height - pad_y * 2.0) / 2.0;
+
+        let expected = [
+            (FrameRateLimit::Fps15, Some(15)),
+            (FrameRateLimit::Fps30, Some(30)),
+            (FrameRateLimit::Fps45, Some(45)),
+            (FrameRateLimit::Fps60, Some(60)),
+            (FrameRateLimit::Fps75, Some(75)),
+            (FrameRateLimit::Fps90, Some(90)),
+            (FrameRateLimit::Fps120, Some(120)),
+            (FrameRateLimit::Unlimited, None),
+        ];
+
+        for (idx, &(preset, expected_fps)) in expected.iter().enumerate() {
+            let col = idx % 4;
+            let row = idx / 4;
+            let click_pt = Point::new(
+                r.x + pad_x + (col as f32 + 0.5) * cell_w,
+                r.y + pad_y + (row as f32 + 0.5) * cell_h,
+            );
+            harness.on_pointer_down(click_pt, false);
+            harness.on_pointer_up(click_pt);
+            assert_eq!(harness.app.frame_rate_limit, preset);
+            assert_eq!(harness.app.effective_frame_rate_limit(), preset);
+            assert_eq!(harness.app.effective_target_fps(), expected_fps);
+        }
+
+        // Now enable Eco mode (PowerMode::PowerSaving) and verify that:
+        // - Unlimited, 120, 90, 75, 60, 45, and 30 are all capped at 30 FPS
+        // - 15 FPS remains 15 FPS
+        harness.click_node(POWER_BTN);
+        assert_eq!(harness.app.power_mode, PowerMode::PowerSaving);
+        for &preset in &[
+            FrameRateLimit::Unlimited,
+            FrameRateLimit::Fps120,
+            FrameRateLimit::Fps90,
+            FrameRateLimit::Fps75,
+            FrameRateLimit::Fps60,
+            FrameRateLimit::Fps45,
+            FrameRateLimit::Fps30,
+        ] {
+            harness.app.set_frame_rate_limit(preset);
+            assert_eq!(harness.app.effective_frame_rate_limit(), FrameRateLimit::Fps30);
+            assert_eq!(harness.app.effective_target_fps(), Some(30));
+            assert!((harness.app.target_frame_interval_sec() - (1.0 / 30.0)).abs() < 1e-4);
+        }
+
+        harness.app.set_frame_rate_limit(FrameRateLimit::Fps15);
+        assert_eq!(harness.app.effective_frame_rate_limit(), FrameRateLimit::Fps15);
+        assert_eq!(harness.app.effective_target_fps(), Some(15));
+        assert!((harness.app.target_frame_interval_sec() - (1.0 / 15.0)).abs() < 1e-4);
     }
 }

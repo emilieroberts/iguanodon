@@ -22,8 +22,8 @@ use iguanodon_core::NodeId;
 use iguanodon_theme::{ThemeId, ThemeMode};
 use iguanodon_widgets::{
     bench_nodes, ApplierImagePayload, ApplierLayoutStyle, ApplierShaderEffect, ApplierTextPayload,
-    ApplierVisualStyle, IguanodonTestHarness, PowerMode, RendererBackend, ReverseEventType,
-    ReverseUiEvent,
+    ApplierVisualStyle, FrameRateLimit, IguanodonTestHarness, PowerMode, RendererBackend,
+    ReverseEventType, ReverseUiEvent,
 };
 use std::slice;
 
@@ -44,6 +44,7 @@ pub enum FfiOpcode {
     SetThemeMode = 0x0B,
     SetPowerMode = 0x0C,
     SetRendererBackend = 0x0D,
+    SetFrameRateLimit = 0x0E,
 
     // Pure `compose.runtime` Applier Scene-Tree Opcodes (`0x10..0x1A`)
     InsertChild = 0x10,
@@ -66,6 +67,7 @@ pub enum DecodedCommand {
     SetThemeMode(ThemeMode),
     SetPowerMode(PowerMode),
     SetRendererBackend(RendererBackend),
+    SetFrameRateLimit(FrameRateLimit),
     SetLabelText {
         node_id: u32,
         text: String,
@@ -181,6 +183,11 @@ impl BinaryCommandEncoder {
     pub fn encode_set_renderer_backend(&mut self, backend: RendererBackend) {
         self.bytes.push(FfiOpcode::SetRendererBackend as u8);
         self.bytes.push(backend as u8);
+    }
+
+    pub fn encode_set_frame_rate_limit(&mut self, limit: FrameRateLimit) {
+        self.bytes.push(FfiOpcode::SetFrameRateLimit as u8);
+        self.bytes.push(limit as u8);
     }
 
     pub fn encode_set_label_text(&mut self, node_id: u32, text: &str) {
@@ -490,6 +497,10 @@ pub fn decode_command_buffer(buf: &[u8]) -> Result<Vec<DecodedCommand>, DecodeEr
                 let backend = RendererBackend::from_u8(read_u8(&mut cursor)?);
                 cmds.push(DecodedCommand::SetRendererBackend(backend));
             }
+            x if x == FfiOpcode::SetFrameRateLimit as u8 => {
+                let limit = FrameRateLimit::from_u8(read_u8(&mut cursor)?);
+                cmds.push(DecodedCommand::SetFrameRateLimit(limit));
+            }
             x if x == FfiOpcode::InsertChild as u8 => {
                 let parent_id = read_u64(&mut cursor)?;
                 let index = read_u32(&mut cursor)?;
@@ -672,6 +683,7 @@ pub fn apply_commands_to_harness(
             DecodedCommand::SetThemeMode(m) => harness.app.set_theme_mode(m),
             DecodedCommand::SetPowerMode(p) => harness.app.set_power_mode(p),
             DecodedCommand::SetRendererBackend(b) => harness.app.set_renderer_backend(b),
+            DecodedCommand::SetFrameRateLimit(l) => harness.app.set_frame_rate_limit(l),
             DecodedCommand::SetLabelText { node_id, text } => {
                 if node_id == bench_nodes::HEADLINE_LABEL.index {
                     harness.app.headline_text = text;
