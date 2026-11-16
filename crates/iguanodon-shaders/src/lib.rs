@@ -1621,19 +1621,26 @@ pub fn evaluate_sdf_instance_foreground(
             0.0
         };
 
-        if (has_smoke_border || material_id == ShaderMaterialId::GentleSmoke as u32) && dist < 30.0 {
+        if (has_smoke_border || material_id == ShaderMaterialId::GentleSmoke as u32) && dist < 32.0 {
             let top_bias = (1.0 - uv_y).clamp(0.0, 1.0);
-            let reach = 22.0 + 8.0 * top_bias;
-            if dist < reach {
+            let smoke_init =
+                if material_id == ShaderMaterialId::GentleSmoke as u32 && border_w <= 0.01 {
+                    (inst.fill_color_start[3] / 0.42).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+            let reach = (22.0 + 10.0 * top_bias) * smoke_init;
+            if dist < reach && smoke_init > 0.01 {
                 let lut = FireSimulationLut::global();
                 let drift = lut.fast_sin(t_sec * 0.22 + uv_y * 1.8) * 0.35;
                 let nx = (px - inst.rect[0]) * 0.024 + drift;
                 let ny = (py - inst.rect[1]) * 0.028 + t_sec * 0.34;
-                let falloff = (1.0 - dist / reach).clamp(0.0, 1.0);
+                let falloff = (1.0 - dist / reach.max(1e-3)).clamp(0.0, 1.0);
                 // Keep smoke wispy (clear transparent space between tendrils) while extending further before dissipating
                 let threshold = 0.16 + 0.10 * (1.0 - falloff);
                 let wisp = ((lut.sample_warped_fire(nx, ny) - threshold) * 1.35).clamp(0.0, 1.0);
-                let mist_a = (wisp * falloff * (0.48 + 0.42 * falloff) * 0.76).clamp(0.0, 1.0);
+                let mist_a =
+                    (wisp * falloff * (0.48 + 0.42 * falloff) * 0.76 * smoke_init).clamp(0.0, 1.0);
                 if mist_a > 0.01 {
                     let mist_c = Color::rgba(0.84, 0.91, 0.99, 1.0);
                     let combined = sh_alpha * (1.0 - mist_a) + mist_a;
@@ -1806,9 +1813,19 @@ pub fn evaluate_sdf_instance_foreground(
             } else {
                 Color::rgba(0.84, 0.90, 0.98, 1.0)
             };
-            let prev_a = fill.a;
-            fill = fill.lerp(plume_color, density * 0.68);
-            fill.a = (prev_a * 0.88 + density * 0.12).clamp(0.38, 0.84);
+            if border_w <= 0.01 {
+                let smoke_init = (start_c.a / 0.42).clamp(0.0, 1.0);
+                fill = Color::rgba(
+                    plume_color.r,
+                    plume_color.g,
+                    plume_color.b,
+                    (density * 0.52 * smoke_init).clamp(0.0, 0.48),
+                );
+            } else {
+                let prev_a = fill.a;
+                fill = fill.lerp(plume_color, density * 0.68);
+                fill.a = (prev_a * 0.88 + density * 0.12).clamp(0.38, 0.84);
+            }
         }
         x if x == ShaderMaterialId::GentlePulsingLights as u32 => {
             // 2. Gently Pulsing Lights: Three soft phase-offset breathing ambient bokeh light orbs (slow & calm)

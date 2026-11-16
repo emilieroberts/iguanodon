@@ -411,17 +411,20 @@ void main() {
             sh_alpha = clamp(t * t * inst.shadow_color.a, 0.0, 1.0);
         }
 
-        if ((has_smoke_border || mat == 7u) && dist < 30.0) {
+        if ((has_smoke_border || mat == 7u) && dist < 32.0) {
             float top_bias = clamp(1.0 - uv_y, 0.0, 1.0);
-            float reach = 22.0 + 8.0 * top_bias;
-            if (dist < reach) {
+            float smoke_init = (mat == 7u && border_w <= 0.01)
+                ? clamp(inst.fill_color_start.a / 0.42, 0.0, 1.0)
+                : 1.0;
+            float reach = (22.0 + 10.0 * top_bias) * smoke_init;
+            if (dist < reach && smoke_init > 0.01) {
                 float drift = sin(t_sec * 0.22 + uv_y * 1.8) * 0.35;
                 float nx = (px - inst.rect.x) * 0.024 + drift;
                 float ny = (py - inst.rect.y) * 0.028 + t_sec * 0.34;
-                float falloff = clamp(1.0 - dist / reach, 0.0, 1.0);
+                float falloff = clamp(1.0 - dist / max(reach, 1e-3), 0.0, 1.0);
                 float threshold = 0.16 + 0.10 * (1.0 - falloff);
                 float wisp = clamp((sample_warped_fire(nx, ny) - threshold) * 1.35, 0.0, 1.0);
-                float mist_a = clamp(wisp * falloff * (0.48 + 0.42 * falloff) * 0.76, 0.0, 1.0);
+                float mist_a = clamp(wisp * falloff * (0.48 + 0.42 * falloff) * 0.76 * smoke_init, 0.0, 1.0);
                 if (mist_a > 0.01) {
                     vec4 mist_c = vec4(0.84, 0.91, 0.99, 1.0);
                     float combined = sh_alpha * (1.0 - mist_a) + mist_a;
@@ -576,9 +579,16 @@ void main() {
         vec4 plume_color = (avg_luma > 1.5)
             ? vec4(0.68, 0.76, 0.88, 1.0)
             : vec4(0.84, 0.90, 0.98, 1.0);
-        float prev_a = fill.a;
-        fill = mix(fill, plume_color, density * 0.68);
-        fill.a = clamp(prev_a * 0.88 + density * 0.12, 0.38, 0.84);
+        if (border_w <= 0.01) {
+            // Pure rising smoke plume overlay (e.g. initiated by clicking a button, keeping the button's own border intact)
+            float smoke_init = clamp(start_c.a / 0.42, 0.0, 1.0);
+            float rise_mask = smoothstep(1.0 - smoke_init * 1.15, 1.0, uv_y + smoke_init * 0.35);
+            fill = vec4(plume_color.rgb, clamp(density * 0.52 * smoke_init * rise_mask, 0.0, 0.48));
+        } else {
+            float prev_a = fill.a;
+            fill = mix(fill, plume_color, density * 0.68);
+            fill.a = clamp(prev_a * 0.88 + density * 0.12, 0.38, 0.84);
+        }
     } else if (mat == 8u) {
         // GentlePulsingLights
         vec2 o_pos[3] = vec2[3](

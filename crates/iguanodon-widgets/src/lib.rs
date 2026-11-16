@@ -384,6 +384,8 @@ pub struct StandardBenchmarkApp {
     pub top_btn_jello_spring: SpringValue,
     pub button_smoke_spring: SpringValue,
     pub last_pressed_button: Option<NodeId>,
+    /// Tracks buttons that have been clicked and are continuously emitting rising smoke (`NodeId -> elapsed_sec`).
+    pub smoking_buttons: std::collections::HashMap<NodeId, f32>,
 
     // 3. Scrollable Text state (with elastic overspring bounce)
     pub scrollable_document: String,
@@ -485,6 +487,7 @@ impl StandardBenchmarkApp {
             top_btn_jello_spring: SpringValue::new(0.0, SpringSpec::new(0.26, 680.0)),
             button_smoke_spring: SpringValue::new(0.0, SpringSpec::new(0.85, 180.0)),
             last_pressed_button: None,
+            smoking_buttons: std::collections::HashMap::new(),
 
             scrollable_document: doc,
             scrollable_text_scroll_y: 0.0,
@@ -1357,6 +1360,9 @@ impl StandardBenchmarkApp {
         self.shader_btn_jello_spring.step(dt);
         self.top_btn_jello_spring.step(dt);
         self.button_smoke_spring.step(dt);
+        for smoke_age in self.smoking_buttons.values_mut() {
+            *smoke_age += dt * self.animation_speed * power_scale;
+        }
         self.scrollable_text_overscroll_spring.step(dt);
         self.lazy_overscroll_spring.step(dt);
         self.progress_spring.step(dt);
@@ -1523,12 +1529,35 @@ impl StandardBenchmarkApp {
             }
         }
 
-        // Helper for emitting a transient gentle smoke puff on whichever button was just pressed
-        let smoke_puff_val = if !is_compose_ui && !is_eco {
-            self.button_smoke_spring.value
-        } else {
-            0.0
-        };
+        // Helper to emit a borderless rising smoke plume (`ShaderMaterialId::GentleSmoke` with `border_w == 0.0`)
+        // on any button that has been clicked, initiating smoothly and continuing to rise after release
+        // while keeping the button's own border completely intact.
+        let push_rising_smoke_plume =
+            |out: &mut Vec<SdfPrimitiveInstance>, btn_node: NodeId, btn_rect: [f32; 4], radius: f32| {
+                if !is_compose_ui && !is_eco {
+                    if let Some(&smoke_age) = self.smoking_buttons.get(&btn_node) {
+                        let smoke_a = ((smoke_age + 0.08) * 0.65).clamp(0.05, 0.42);
+                        out.push(SdfPrimitiveInstance {
+                            rect: btn_rect,
+                            corner_radii: [radius; 4],
+                            clip_rect: full_clip,
+                            fill_color_start: [0.84, 0.90, 0.98, smoke_a],
+                            fill_color_end: [0.84, 0.90, 0.98, smoke_a],
+                            border_color: [0.0; 4],
+                            shadow_color: [0.0; 4],
+                            params: [
+                                0.0,
+                                0.0,
+                                p,
+                                pack_material_and_border(
+                                    ShaderMaterialId::GentleSmoke,
+                                    BorderShaderEffect::None,
+                                ),
+                            ],
+                        });
+                    }
+                }
+            };
 
         // 1. Labels & 2. Buttons (including Renderer Backend & Power Mode toggles in TOP_BAR)
         for &top_btn in &[RENDERER_BTN, POWER_BTN, THEME_BTN, MODE_BTN] {
@@ -1546,11 +1575,6 @@ impl StandardBenchmarkApp {
                 } else {
                     Self::apply_jello_wobble(r, self.top_btn_jello_spring.value)
                 };
-                let top_border = if is_pressed_btn && smoke_puff_val > 0.08 {
-                    BorderShaderEffect::GentleSmokeBorder
-                } else {
-                    BorderShaderEffect::PulsingFieryBorder
-                };
                 out.push(SdfPrimitiveInstance {
                     rect: btn_rect,
                     corner_radii: [th.shapes.radius_sm; 4],
@@ -1563,34 +1587,28 @@ impl StandardBenchmarkApp {
                         th.shapes.border_width.max(1.4),
                         if is_eco { 2.0 } else { 6.0 },
                         p,
-                        pack_material_and_border(subtle_glass_mat, filter_border(top_border)),
+                        pack_material_and_border(
+                            subtle_glass_mat,
+                            filter_border(BorderShaderEffect::PulsingFieryBorder),
+                        ),
                     ],
                 });
+                push_rising_smoke_plume(&mut out, top_btn, btn_rect, th.shapes.radius_sm);
             }
         }
 
         if let Some(r) = self.layout.bounds(PRIMARY_BTN) {
-            let morph_r = th.shapes.radius_md
-                * (1.0 - self.button_press_spring.value * (1.0 - th.shapes.pressed_corner_morph));
+            let morph_r = (th.shapes.radius_md
+                * (1.0 - self.button_press_spring.value * (1.0 - th.shapes.pressed_corner_morph)))
+                .max(4.0);
             let btn_rect = if is_compose_ui {
                 r.to_array()
             } else {
                 Self::apply_jello_wobble(r, self.button_jello_spring.value)
             };
-            let is_smoking = self.last_pressed_button == Some(PRIMARY_BTN) && smoke_puff_val > 0.08;
-            let btn_mat = if is_smoking {
-                ShaderMaterialId::GentleSmoke
-            } else {
-                subtle_glass_mat
-            };
-            let btn_border = if is_smoking {
-                BorderShaderEffect::GentleSmokeBorder
-            } else {
-                BorderShaderEffect::FireBorder
-            };
             out.push(SdfPrimitiveInstance {
                 rect: btn_rect,
-                corner_radii: [morph_r.max(4.0); 4],
+                corner_radii: [morph_r; 4],
                 clip_rect: full_clip,
                 fill_color_start: th.colors.primary.with_alpha(btn_alpha).to_array(),
                 fill_color_end: th.colors.secondary.with_alpha(btn_alpha).to_array(),
@@ -1600,25 +1618,20 @@ impl StandardBenchmarkApp {
                     th.shapes.border_width.max(1.5),
                     8.0,
                     p,
-                    pack_material_and_border(btn_mat, filter_border(btn_border)),
+                    pack_material_and_border(
+                        subtle_glass_mat,
+                        filter_border(BorderShaderEffect::FireBorder),
+                    ),
                 ],
             });
+            push_rising_smoke_plume(&mut out, PRIMARY_BTN, btn_rect, morph_r);
         }
 
         if let Some(r) = self.layout.bounds(FIRE_SHADER_BTN) {
-            let is_smoking =
-                self.last_pressed_button == Some(FIRE_SHADER_BTN) && smoke_puff_val > 0.08;
-            let mat = if is_smoking {
-                ShaderMaterialId::GentleSmoke
-            } else if self.fire_shader_enabled && !is_compose_ui && !is_eco {
+            let mat = if self.fire_shader_enabled && !is_compose_ui && !is_eco {
                 ShaderMaterialId::ProceduralFire
             } else {
                 subtle_glass_mat
-            };
-            let btn_border = if is_smoking {
-                BorderShaderEffect::GentleSmokeBorder
-            } else {
-                BorderShaderEffect::FireBorder
             };
             let btn_rect = if is_compose_ui {
                 r.to_array()
@@ -1637,9 +1650,10 @@ impl StandardBenchmarkApp {
                     1.5,
                     12.0,
                     p,
-                    pack_material_and_border(mat, filter_border(btn_border)),
+                    pack_material_and_border(mat, filter_border(BorderShaderEffect::FireBorder)),
                 ],
             });
+            push_rising_smoke_plume(&mut out, FIRE_SHADER_BTN, btn_rect, th.shapes.radius_md);
         }
 
         // 3. Scrollable Text + Scrollbar Track & Thumb (with Gentle Smoke Border & overspring offset)
@@ -3483,6 +3497,8 @@ pub struct ApplierSceneGraph {
     pub press_jello_spring: SpringValue,
     pub press_smoke_spring: SpringValue,
     pub scroll_overshoot_spring: SpringValue,
+    /// Tracks clicked nodes that are continuously emitting rising smoke (`node_id -> elapsed_sec`).
+    pub smoking_nodes: std::collections::HashMap<u64, f32>,
 }
 
 impl Default for ApplierSceneGraph {
@@ -3505,6 +3521,7 @@ impl ApplierSceneGraph {
             press_jello_spring: SpringValue::new(0.0, SpringSpec::new(0.24, 680.0)),
             press_smoke_spring: SpringValue::new(0.0, SpringSpec::new(0.85, 180.0)),
             scroll_overshoot_spring: SpringValue::new(0.0, SpringSpec::new(0.42, 420.0)),
+            smoking_nodes: std::collections::HashMap::new(),
         }
     }
 
@@ -3512,6 +3529,9 @@ impl ApplierSceneGraph {
         self.press_jello_spring.step(dt);
         self.press_smoke_spring.step(dt);
         self.scroll_overshoot_spring.step(dt);
+        for smoke_age in self.smoking_nodes.values_mut() {
+            *smoke_age += dt;
+        }
     }
 
     pub fn ensure_node(&mut self, node_id: u64, kind: u8) -> &mut ApplierNode {
@@ -3796,7 +3816,6 @@ impl ApplierSceneGraph {
         if has_box {
             *widget_nodes += 1;
             let is_pressed = self.pressed_node_id == Some(node_id);
-            let is_smoking = is_pressed && self.press_smoke_spring.value > 0.08;
             let fill_c = if node.visual.bg_rgba != 0 {
                 Color::from_hex(node.visual.bg_rgba)
             } else if node.kind == 5 {
@@ -3811,18 +3830,12 @@ impl ApplierSceneGraph {
             };
             let mat = if node.image.is_some() {
                 ShaderMaterialId::TexturedImage
-            } else if is_smoking {
-                ShaderMaterialId::GentleSmoke
             } else if node.shader.shader_id == 0 {
                 ShaderMaterialId::SubtleGlassReflection
             } else {
                 ShaderMaterialId::from_u32(node.shader.shader_id as u32)
             };
-            let border_fx = if is_smoking {
-                BorderShaderEffect::GentleSmokeBorder
-            } else {
-                BorderShaderEffect::PulsingFieryBorder
-            };
+            let border_fx = BorderShaderEffect::PulsingFieryBorder;
             let radius = if node.visual.corner_radius > 0.0 {
                 node.visual.corner_radius
             } else {
@@ -3853,6 +3866,27 @@ impl ApplierSceneGraph {
                     pack_material_and_border(mat, border_fx),
                 ],
             });
+            if let Some(&smoke_age) = self.smoking_nodes.get(&node_id) {
+                let smoke_a = ((smoke_age + 0.08) * 0.65).clamp(0.05, 0.42);
+                out.push(SdfPrimitiveInstance {
+                    rect: box_rect,
+                    corner_radii: [radius; 4],
+                    clip_rect: node_clip.to_array(),
+                    fill_color_start: [0.84, 0.90, 0.98, smoke_a],
+                    fill_color_end: [0.84, 0.90, 0.98, smoke_a],
+                    border_color: [0.0; 4],
+                    shadow_color: [0.0; 4],
+                    params: [
+                        0.0,
+                        0.0,
+                        theme.shapes.shape_exponent_p,
+                        pack_material_and_border(
+                            ShaderMaterialId::GentleSmoke,
+                            BorderShaderEffect::None,
+                        ),
+                    ],
+                });
+            }
         }
 
         if let Some(txt) = &node.text {
@@ -3987,9 +4021,10 @@ impl IguanodonTestHarness {
             PRIMARY_BTN => {
                 self.app.button_click_count += 1;
                 self.app.last_pressed_button = Some(PRIMARY_BTN);
+                self.app.smoking_buttons.entry(PRIMARY_BTN).or_insert(0.0);
                 self.app.button_press_spring.value = 1.0;
                 self.app.button_press_spring.set_target(0.0);
-                // Trigger underdamped jello click wobble & gentle smoke puff on press
+                // Trigger underdamped jello click wobble & initiate rising smoke on press
                 self.app.button_jello_spring.value = 1.0;
                 self.app.button_jello_spring.set_target(0.0);
                 self.app.button_smoke_spring.value = 1.0;
@@ -4003,6 +4038,7 @@ impl IguanodonTestHarness {
             FIRE_SHADER_BTN => {
                 self.app.fire_shader_enabled = !self.app.fire_shader_enabled;
                 self.app.last_pressed_button = Some(FIRE_SHADER_BTN);
+                self.app.smoking_buttons.entry(FIRE_SHADER_BTN).or_insert(0.0);
                 self.app.shader_btn_jello_spring.value = 1.0;
                 self.app.shader_btn_jello_spring.set_target(0.0);
                 self.app.button_smoke_spring.value = 1.0;
@@ -4010,6 +4046,7 @@ impl IguanodonTestHarness {
             }
             THEME_BTN => {
                 self.app.last_pressed_button = Some(THEME_BTN);
+                self.app.smoking_buttons.entry(THEME_BTN).or_insert(0.0);
                 self.app.top_btn_jello_spring.value = 1.0;
                 self.app.top_btn_jello_spring.set_target(0.0);
                 self.app.button_smoke_spring.value = 1.0;
@@ -4018,6 +4055,7 @@ impl IguanodonTestHarness {
             }
             MODE_BTN => {
                 self.app.last_pressed_button = Some(MODE_BTN);
+                self.app.smoking_buttons.entry(MODE_BTN).or_insert(0.0);
                 self.app.top_btn_jello_spring.value = 1.0;
                 self.app.top_btn_jello_spring.set_target(0.0);
                 self.app.button_smoke_spring.value = 1.0;
@@ -4037,6 +4075,7 @@ impl IguanodonTestHarness {
             }
             POWER_BTN => {
                 self.app.last_pressed_button = Some(POWER_BTN);
+                self.app.smoking_buttons.entry(POWER_BTN).or_insert(0.0);
                 self.app.top_btn_jello_spring.value = 1.0;
                 self.app.top_btn_jello_spring.set_target(0.0);
                 self.app.button_smoke_spring.value = 1.0;
@@ -4057,6 +4096,7 @@ impl IguanodonTestHarness {
             }
             RENDERER_BTN => {
                 self.app.last_pressed_button = Some(RENDERER_BTN);
+                self.app.smoking_buttons.entry(RENDERER_BTN).or_insert(0.0);
                 self.app.top_btn_jello_spring.value = 1.0;
                 self.app.top_btn_jello_spring.set_target(0.0);
                 self.app.button_smoke_spring.value = 1.0;
@@ -4434,6 +4474,7 @@ impl IguanodonTestHarness {
                 if click_id >= 100 {
                     self.applier_scene.focused_node_id = Some(click_id);
                     self.applier_scene.pressed_node_id = Some(click_id);
+                    self.applier_scene.smoking_nodes.entry(click_id).or_insert(0.0);
                     self.applier_scene.press_jello_spring.value = 1.0;
                     self.applier_scene.press_jello_spring.set_target(0.0);
                     self.applier_scene.press_smoke_spring.value = 1.0;
@@ -5219,18 +5260,42 @@ mod tests {
         });
         assert!(has_pulsing_fiery, "Default borders should use gentle pulsing/rotating fiery colours");
 
-        // 4. Pressing a button jiggles slightly and smokes a little when pressed, then settles for power efficiency
+        // 4. Clicking a jiggly button initiates rising smoke that continues rising even after release,
+        // while keeping the button's own border completely intact (no border swap in/out).
         harness.click_node(PRIMARY_BTN);
         assert_eq!(harness.app.last_pressed_button, Some(PRIMARY_BTN));
         assert!(harness.app.button_jello_spring.value > 0.9);
-        assert!(harness.app.button_smoke_spring.value > 0.9);
+        assert!(harness.app.smoking_buttons.contains_key(&PRIMARY_BTN));
         let smoking_instances = harness.app.build_sdf_instances();
-        let has_gentle_smoke_btn = smoking_instances.iter().any(|inst| {
+        let has_rising_smoke_plume = smoking_instances.iter().any(|inst| {
             let (mat, border_eff) = iguanodon_shaders::unpack_material_and_border(inst.params[3]);
             mat == ShaderMaterialId::GentleSmoke as u32
-                && border_eff == BorderShaderEffect::GentleSmokeBorder
+                && border_eff == BorderShaderEffect::None
+                && inst.params[0] == 0.0
         });
-        assert!(has_gentle_smoke_btn, "Pressed button should emit gentle smoke");
+        assert!(
+            has_rising_smoke_plume,
+            "Clicked button should initiate a borderless rising smoke plume"
+        );
+
+        // Advance 120 frames (1 full second after click release) and verify the smoke is still rising
+        // and its plume alpha has grown from initial click to full steady rising smoke!
+        harness.advance_frames(120);
+        let after_release_instances = harness.app.build_sdf_instances();
+        let steady_plume = after_release_instances.iter().find(|inst| {
+            let (mat, border_eff) = iguanodon_shaders::unpack_material_and_border(inst.params[3]);
+            mat == ShaderMaterialId::GentleSmoke as u32
+                && border_eff == BorderShaderEffect::None
+                && inst.params[0] == 0.0
+        });
+        assert!(
+            steady_plume.is_some(),
+            "Smoke plume must continue rising after button release"
+        );
+        assert!(
+            steady_plume.unwrap().fill_color_start[3] > 0.35,
+            "Smoke plume should smoothly build up as it rises after button click"
+        );
 
         // 5. Scrolling within a list automatically triggers a bounce overshoot
         harness.scroll_node(LAZY_COLUMN, 60.0);
