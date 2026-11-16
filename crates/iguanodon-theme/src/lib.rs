@@ -23,17 +23,20 @@
 
 use iguanodon_core::{Color, MotionScheme};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum ThemeId {
     Material3Expressive = 0,
     WindowsFluent2 = 1,
     IosLiquidGlass = 2,
     LinuxEliteObsidian = 3,
+    #[default]
+    IguanodonDefault = 4,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 4] = [
+    pub const ALL: [ThemeId; 5] = [
+        ThemeId::IguanodonDefault,
         ThemeId::Material3Expressive,
         ThemeId::WindowsFluent2,
         ThemeId::IosLiquidGlass,
@@ -45,12 +48,14 @@ impl ThemeId {
             0 => Self::Material3Expressive,
             1 => Self::WindowsFluent2,
             2 => Self::IosLiquidGlass,
-            _ => Self::LinuxEliteObsidian,
+            3 => Self::LinuxEliteObsidian,
+            _ => Self::IguanodonDefault,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
+            Self::IguanodonDefault => "Iguanodon Crimson Jellyfish (Default)",
             Self::Material3Expressive => "Material 3 Expressive",
             Self::WindowsFluent2 => "Windows Fluent 2 (Acrylic/Reveal)",
             Self::IosLiquidGlass => "iOS Cupertino (Liquid Glass)",
@@ -60,6 +65,7 @@ impl ThemeId {
 
     pub fn short_name(&self) -> &'static str {
         match self {
+            Self::IguanodonDefault => "Iguanodon",
             Self::Material3Expressive => "Material 3",
             Self::WindowsFluent2 => "Fluent 2",
             Self::IosLiquidGlass => "Liquid Glass",
@@ -109,6 +115,8 @@ impl ThemeMode {
 /// Signature GPU shader interaction style for a theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InteractionShaderKind {
+    /// Default Iguanodon theme: subtle glass reflection with gentle pulsing/rotating fiery borders and smoke-on-press buttons.
+    IguanodonFieryPulse,
     /// Material 3 Expressive sparkling radial ink ripple.
     MaterialRipple,
     /// Windows Fluent 2 cursor-tracked radial border & fill illumination.
@@ -238,7 +246,7 @@ pub struct ThemeDescriptor {
 
 impl Default for ThemeDescriptor {
     fn default() -> Self {
-        Self::material3_expressive()
+        Self::iguanodon_default()
     }
 }
 
@@ -249,6 +257,8 @@ impl ThemeDescriptor {
 
     pub fn by_id_and_mode(id: ThemeId, mode: ThemeMode) -> Self {
         match (id, mode) {
+            (ThemeId::IguanodonDefault, ThemeMode::Dark) => Self::iguanodon_default(),
+            (ThemeId::IguanodonDefault, ThemeMode::Light) => Self::iguanodon_default_light(),
             (ThemeId::Material3Expressive, ThemeMode::Dark) => Self::material3_expressive(),
             (ThemeId::Material3Expressive, ThemeMode::Light) => Self::material3_expressive_light(),
             (ThemeId::WindowsFluent2, ThemeMode::Dark) => Self::windows_fluent2(),
@@ -257,6 +267,88 @@ impl ThemeDescriptor {
             (ThemeId::IosLiquidGlass, ThemeMode::Light) => Self::ios_liquid_glass_light(),
             (ThemeId::LinuxEliteObsidian, ThemeMode::Dark) => Self::linux_elite_obsidian(),
             (ThemeId::LinuxEliteObsidian, ThemeMode::Light) => Self::linux_elite_obsidian_light(),
+        }
+    }
+
+    /// Canonical Iguanodon Default Theme (Dark): Crimson-red Electric Jellyfish backdrop,
+    /// gentle pulsing/rotating fiery borders, smoke-and-jiggle buttons on press, generous
+    /// typography & element padding, and bounce-overshoot scrolling.
+    pub const fn iguanodon_default() -> Self {
+        Self {
+            id: ThemeId::IguanodonDefault,
+            mode: ThemeMode::Dark,
+            colors: ColorPalette {
+                primary: Color::from_hex(0xE8322EFF),
+                on_primary: Color::from_hex(0xFFFFFFFF),
+                primary_container: Color::from_hex(0x6E1418D8),
+                on_primary_container: Color::from_hex(0xFFE4E2FF),
+                secondary: Color::from_hex(0xFF6D24FF),
+                tertiary: Color::from_hex(0xFFAE19FF),
+                background: Color::from_hex(0x180509FF),
+                surface: Color::from_hex(0x210B10B8),
+                surface_container: Color::from_hex(0x2E1118C6),
+                surface_bright: Color::from_hex(0x401822D4),
+                on_surface: Color::from_hex(0xFFF4F2FF),
+                on_surface_variant: Color::from_hex(0xE8C6C8FF),
+                outline: Color::from_hex(0xFF5624E6),
+                accent_glow: Color::from_hex(0xFF8C3BFF),
+                error: Color::from_hex(0xFF4D5EFF),
+            },
+            shapes: ShapeTokens {
+                radius_sm: 12.0,
+                radius_md: 18.0,
+                radius_lg: 26.0,
+                radius_xl: 34.0,
+                shape_exponent_p: 2.8,
+                pressed_corner_morph: 0.62,
+                border_width: 1.6,
+            },
+            optics: OpticsTokens {
+                backdrop_blur_px: 18.0,
+                surface_translucency: 0.82,
+                noise_grain: 0.02,
+                specular_refraction: 0.22,
+                shadow_elevation_px: 12.0,
+            },
+            typography: TypographyTokens {
+                display_size: 34.0,
+                headline_size: 24.0,
+                title_size: 18.5,
+                body_size: 16.0,
+                label_size: 14.5,
+                mono_size: 14.0,
+                line_height_multiplier: 1.42,
+            },
+            motion: MotionScheme::expressive(),
+            interaction_shader: InteractionShaderKind::IguanodonFieryPulse,
+        }
+    }
+
+    /// Canonical Iguanodon Default Theme (Light): Warm ruby-coral Electric Jellyfish daylight backdrop
+    /// with gentle pulsing/rotating fiery borders and high-contrast espresso-crimson typography.
+    pub const fn iguanodon_default_light() -> Self {
+        let base = Self::iguanodon_default();
+        Self {
+            id: ThemeId::IguanodonDefault,
+            mode: ThemeMode::Light,
+            colors: ColorPalette {
+                primary: Color::from_hex(0xD42220FF),
+                on_primary: Color::from_hex(0xFFFFFFFF),
+                primary_container: Color::from_hex(0xFFE0DEEC),
+                on_primary_container: Color::from_hex(0x4D080AFF),
+                secondary: Color::from_hex(0xE0530EFF),
+                tertiary: Color::from_hex(0xD98200FF),
+                background: Color::from_hex(0xFFF6F5FF),
+                surface: Color::from_hex(0xFFF8F6C8),
+                surface_container: Color::from_hex(0xFCECE9D6),
+                surface_bright: Color::from_hex(0xFFFFFFE6),
+                on_surface: Color::from_hex(0x210B0EFF),
+                on_surface_variant: Color::from_hex(0x5E2E34FF),
+                outline: Color::from_hex(0xF04E1EE0),
+                accent_glow: Color::from_hex(0xD43810FF),
+                error: Color::from_hex(0xB80C24FF),
+            },
+            ..base
         }
     }
 

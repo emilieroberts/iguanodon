@@ -38,7 +38,7 @@ import kotlin.math.roundToInt
  * and configurable font scale to all `@Composable` widgets on both Android and Desktop.
  */
 val LocalIguanodonSession = staticCompositionLocalOf<IguanodonSession?> { null }
-val LocalIguanodonThemeId = staticCompositionLocalOf { IguanodonThemeId.Material3Expressive }
+val LocalIguanodonThemeId = staticCompositionLocalOf { IguanodonThemeId.IguanodonDefault }
 val LocalIguanodonThemeMode = staticCompositionLocalOf { IguanodonThemeMode.Dark }
 val LocalIguanodonFontScale = staticCompositionLocalOf { 1.0f }
 
@@ -1118,6 +1118,46 @@ fun resolveIguanodonColorScheme(
     themeId: IguanodonThemeId,
     darkTheme: Boolean,
 ): ColorScheme = when (themeId) {
+    IguanodonThemeId.IguanodonDefault -> if (darkTheme) {
+        darkColorScheme(
+            primary = Color(0xFFE8322E),
+            onPrimary = Color(0xFFFFFFFF),
+            primaryContainer = Color(0xFF6E1418),
+            onPrimaryContainer = Color(0xFFFFE4E2),
+            secondary = Color(0xFFFF6D24),
+            onSecondary = Color(0xFF3A0F00),
+            secondaryContainer = Color(0xFF521C14),
+            onSecondaryContainer = Color(0xFFFFDCCF),
+            tertiary = Color(0xFFFFAE19),
+            background = Color(0xFF180509),
+            onBackground = Color(0xFFFFF4F2),
+            surface = Color(0xFF210B10),
+            onSurface = Color(0xFFFFF4F2),
+            surfaceVariant = Color(0xFF401822),
+            onSurfaceVariant = Color(0xFFE8C6C8),
+            outline = Color(0xFFFF5624),
+        )
+    } else {
+        lightColorScheme(
+            primary = Color(0xFFD42220),
+            onPrimary = Color(0xFFFFFFFF),
+            primaryContainer = Color(0xFFFFE0DE),
+            onPrimaryContainer = Color(0xFF4D080A),
+            secondary = Color(0xFFE0530E),
+            onSecondary = Color(0xFFFFFFFF),
+            secondaryContainer = Color(0xFFFFDCCF),
+            onSecondaryContainer = Color(0xFF380D00),
+            tertiary = Color(0xFFD98200),
+            background = Color(0xFFFFF6F5),
+            onBackground = Color(0xFF210B0E),
+            surface = Color(0xFFFFF8F6),
+            onSurface = Color(0xFF210B0E),
+            surfaceVariant = Color(0xFFFCECE9),
+            onSurfaceVariant = Color(0xFF5E2E34),
+            outline = Color(0xFFF04E1E),
+        )
+    }
+
     IguanodonThemeId.Material3Expressive -> if (darkTheme) {
         darkColorScheme(
             primary = Color(0xFFD0BCFF),
@@ -1273,7 +1313,7 @@ fun resolveIguanodonColorScheme(
 
 @Composable
 fun MaterialExpressiveTheme(
-    themeId: IguanodonThemeId = IguanodonThemeId.Material3Expressive,
+    themeId: IguanodonThemeId = IguanodonThemeId.IguanodonDefault,
     darkTheme: Boolean = true,
     fontScale: Float = 1.0f,
     content: @Composable () -> Unit,

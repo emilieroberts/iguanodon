@@ -151,6 +151,7 @@ object BenchNodeIds {
 }
 
 enum class IguanodonThemeId(val code: Byte, val displayName: String) {
+    IguanodonDefault(4, "Iguanodon Crimson Jellyfish (Default)"),
     Material3Expressive(0, "Material 3 Expressive (Compose 1.9)"),
     WindowsFluent2(1, "Windows 11 Fluent 2 (Mica/Acrylic)"),
     IosLiquidGlass(2, "iOS Cupertino Liquid Glass"),

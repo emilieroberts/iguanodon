@@ -158,17 +158,17 @@ vec4 evaluate_electric_jellyfish_backdrop(
     vec3 rgb = dark_theme
         ? sample_4stop_linear(
             diag_t,
-            vec3(4.0 / 255.0, 10.0 / 255.0, 24.0 / 255.0),
-            vec3(7.0 / 255.0, 20.0 / 255.0, 43.0 / 255.0),
-            vec3(10.0 / 255.0, 29.0 / 255.0, 59.0 / 255.0),
-            vec3(5.0 / 255.0, 14.0 / 255.0, 32.0 / 255.0)
+            vec3(26.0 / 255.0, 5.0 / 255.0, 10.0 / 255.0),
+            vec3(46.0 / 255.0, 8.0 / 255.0, 16.0 / 255.0),
+            vec3(64.0 / 255.0, 12.0 / 255.0, 22.0 / 255.0),
+            vec3(34.0 / 255.0, 6.0 / 255.0, 13.0 / 255.0)
         )
         : sample_4stop_linear(
             diag_t,
-            vec3(86.0 / 255.0, 160.0 / 255.0, 235.0 / 255.0),
-            vec3(66.0 / 255.0, 140.0 / 255.0, 224.0 / 255.0),
-            vec3(78.0 / 255.0, 152.0 / 255.0, 232.0 / 255.0),
-            vec3(104.0 / 255.0, 177.0 / 255.0, 246.0 / 255.0)
+            vec3(235.0 / 255.0, 96.0 / 255.0, 104.0 / 255.0),
+            vec3(224.0 / 255.0, 74.0 / 255.0, 86.0 / 255.0),
+            vec3(232.0 / 255.0, 88.0 / 255.0, 98.0 / 255.0),
+            vec3(246.0 / 255.0, 114.0 / 255.0, 122.0 / 255.0)
         );
 
     vec2 base_pos[5] = vec2[5](
@@ -204,47 +204,47 @@ vec4 evaluate_electric_jellyfish_backdrop(
         vec3 b_rim;
         if (dark_theme) {
             if (i == 0) {
-                b_core = vec3(0.00, 0.96, 1.00);
-                b_mid = vec3(0.00, 0.57, 0.92);
-                b_rim = vec3(0.19, 0.31, 1.00);
+                b_core = vec3(1.00, 0.24, 0.28);
+                b_mid = vec3(0.92, 0.06, 0.18);
+                b_rim = vec3(0.68, 0.02, 0.14);
             } else if (i == 1) {
-                b_core = vec3(0.49, 0.30, 1.00);
-                b_mid = vec3(0.00, 0.69, 1.00);
-                b_rim = vec3(0.00, 0.90, 1.00);
+                b_core = vec3(1.00, 0.44, 0.18);
+                b_mid = vec3(0.96, 0.16, 0.14);
+                b_rim = vec3(0.82, 0.04, 0.20);
             } else if (i == 2) {
-                b_core = vec3(0.09, 1.00, 1.00);
-                b_mid = vec3(0.16, 0.38, 1.00);
-                b_rim = vec3(0.67, 0.00, 1.00);
+                b_core = vec3(1.00, 0.28, 0.36);
+                b_mid = vec3(0.88, 0.08, 0.22);
+                b_rim = vec3(0.62, 0.00, 0.24);
             } else if (i == 3) {
-                b_core = vec3(0.39, 1.00, 0.85);
-                b_mid = vec3(0.00, 0.72, 0.83);
-                b_rim = vec3(0.24, 0.35, 1.00);
+                b_core = vec3(1.00, 0.54, 0.22);
+                b_mid = vec3(0.94, 0.20, 0.12);
+                b_rim = vec3(0.75, 0.05, 0.16);
             } else {
-                b_core = vec3(0.88, 0.25, 0.98);
-                b_mid = vec3(0.33, 0.43, 1.00);
-                b_rim = vec3(0.00, 0.90, 1.00);
+                b_core = vec3(0.98, 0.18, 0.42);
+                b_mid = vec3(0.86, 0.08, 0.26);
+                b_rim = vec3(0.95, 0.24, 0.18);
             }
         } else {
             if (i == 0) {
                 b_core = vec3(1.00, 1.00, 1.00);
-                b_mid = vec3(0.50, 0.97, 1.00);
-                b_rim = vec3(0.09, 1.00, 1.00);
+                b_mid = vec3(1.00, 0.54, 0.58);
+                b_rim = vec3(0.96, 0.16, 0.24);
             } else if (i == 1) {
-                b_core = vec3(0.91, 0.87, 1.00);
-                b_mid = vec3(0.51, 0.69, 1.00);
-                b_rim = vec3(0.00, 0.90, 1.00);
+                b_core = vec3(1.00, 0.90, 0.86);
+                b_mid = vec3(1.00, 0.58, 0.44);
+                b_rim = vec3(0.92, 0.18, 0.14);
             } else if (i == 2) {
                 b_core = vec3(1.00, 1.00, 1.00);
-                b_mid = vec3(0.39, 1.00, 0.85);
-                b_rim = vec3(0.33, 0.43, 1.00);
+                b_mid = vec3(1.00, 0.46, 0.54);
+                b_rim = vec3(0.84, 0.12, 0.28);
             } else if (i == 3) {
-                b_core = vec3(0.88, 1.00, 0.98);
-                b_mid = vec3(0.39, 1.00, 0.85);
-                b_rim = vec3(0.00, 0.69, 1.00);
+                b_core = vec3(1.00, 0.95, 0.88);
+                b_mid = vec3(1.00, 0.62, 0.42);
+                b_rim = vec3(0.90, 0.22, 0.14);
             } else {
-                b_core = vec3(0.97, 0.73, 0.82);
-                b_mid = vec3(0.50, 0.85, 1.00);
-                b_rim = vec3(0.09, 1.00, 1.00);
+                b_core = vec3(1.00, 0.82, 0.86);
+                b_mid = vec3(0.98, 0.50, 0.58);
+                b_rim = vec3(0.94, 0.18, 0.26);
             }
         }
 
@@ -292,40 +292,56 @@ vec4 evaluate_electric_jellyfish_backdrop(
         if (uv_y < 0.5) {
             float u = uv_y * 2.0;
             veil_col = vec3(
+                mix(38.0, 51.0, u) / 255.0,
                 mix(7.0, 9.0, u) / 255.0,
-                mix(19.0, 25.0, u) / 255.0,
-                mix(38.0, 51.0, u) / 255.0
+                mix(14.0, 20.0, u) / 255.0
             );
             veil_a = mix(0.28, 0.22, u);
         } else {
             float u = (uv_y - 0.5) * 2.0;
             veil_col = vec3(
+                mix(51.0, 34.0, u) / 255.0,
                 mix(9.0, 6.0, u) / 255.0,
-                mix(25.0, 16.0, u) / 255.0,
-                mix(51.0, 34.0, u) / 255.0
+                mix(20.0, 13.0, u) / 255.0
             );
             veil_a = mix(0.22, 0.30, u);
         }
     } else if (uv_y < 0.5) {
         float u = uv_y * 2.0;
         veil_col = vec3(
+            1.0,
             mix(214.0, 196.0, u) / 255.0,
-            mix(236.0, 228.0, u) / 255.0,
-            1.0
+            mix(220.0, 206.0, u) / 255.0
         );
         veil_a = mix(0.18, 0.14, u);
     } else {
         float u = (uv_y - 0.5) * 2.0;
         veil_col = vec3(
+            1.0,
             mix(196.0, 214.0, u) / 255.0,
-            mix(228.0, 236.0, u) / 255.0,
-            1.0
+            mix(206.0, 220.0, u) / 255.0
         );
         veil_a = mix(0.14, 0.20, u);
     }
 
     rgb = clamp(rgb * (1.0 - veil_a) + veil_col * veil_a, vec3(0.0), vec3(1.0));
     return vec4(rgb, 1.0);
+}
+
+vec3 evaluate_pulsing_rotating_fiery_border(float uv_x, float uv_y, float t_sec) {
+    float tau = 6.28318530718;
+    float angle_turn = atan(uv_y - 0.5, uv_x - 0.5) * (1.0 / tau) + 0.5;
+    float rot_phase = fract(angle_turn - t_sec * 0.14);
+    float rot_wave = 0.5 + 0.5 * cos(rot_phase * tau);
+    float pulse = 0.78 + 0.22 * sin(t_sec * 1.45 + (uv_x + uv_y) * 2.4);
+    float heat = clamp(0.18 + rot_wave * 0.62 * pulse + (pulse - 0.78) * 0.65, 0.0, 1.0);
+    return sample_4stop_linear(
+        heat,
+        vec3(0.76, 0.09, 0.12),
+        vec3(0.96, 0.24, 0.08),
+        vec3(1.00, 0.54, 0.10),
+        vec3(1.00, 0.84, 0.28)
+    );
 }
 
 void main() {
@@ -359,7 +375,7 @@ void main() {
         abs(inst.clip_rect.y - inst.rect.y) < 1.0 &&
         abs(inst.clip_rect.z - inst.rect.z) < 1.0 &&
         abs(inst.clip_rect.w - inst.rect.w) < 1.0;
-    if (clip_is_self && (border_fx != 0u || mat == 2u || mat == 5u || mat == 7u || mat == 10u)) {
+    if (clip_is_self && (border_fx == 1u || border_fx == 2u || mat == 2u || mat == 5u || mat == 7u || mat == 10u)) {
         c_min -= vec2(32.0);
         c_max += vec2(32.0);
     }
@@ -382,7 +398,9 @@ void main() {
     bool has_smoke_border = (border_fx == 2u);
     bool has_fire_border = (border_fx == 1u)
         || (mat == 2u)
-        || (!has_smoke_border && border_w > 0.0 && (mat == 5u || (inst.border_color.r > 0.9 && inst.border_color.g < 0.35)));
+        || (!has_smoke_border && border_fx != 3u && border_w > 0.0 && (mat == 5u || (inst.border_color.r > 0.9 && inst.border_color.g < 0.20)));
+    bool has_pulsing_fiery_border = (border_fx == 3u)
+        || (!has_smoke_border && !has_fire_border && border_w > 0.0 && mat != 0u);
 
     // 3. Outside the SDF boundary: analytic drop shadow + optional external fire/smoke/glowbar corona
     if (dist > 0.5) {
@@ -659,7 +677,7 @@ void main() {
         fill = glass;
     }
 
-    // 5. Interior rim & border stroke for GentleSmokeBorder or FireBorder
+    // 5. Interior rim & border stroke for GentleSmokeBorder, FireBorder, or PulsingFieryBorder
     if (border_w > 0.0 && dist > -border_w - 5.5) {
         if (has_smoke_border) {
             float sway = sin(t_sec * 0.24 + uv_y * 2.0) * 0.30;
@@ -684,6 +702,12 @@ void main() {
             float prev_a = fill.a;
             fill = mix(fill, fire_col, clamp(rim_t * 0.92, 0.0, 1.0));
             fill.a = max(prev_a, rim_t * 0.95);
+        } else if (has_pulsing_fiery_border && dist > -border_w - 3.5) {
+            float rim_t = clamp(1.0 - clamp((-dist) / (border_w + 3.5), 0.0, 1.0), 0.0, 1.0);
+            vec3 fiery_rgb = evaluate_pulsing_rotating_fiery_border(uv_x, uv_y, t_sec);
+            float prev_a = fill.a;
+            fill = mix(fill, vec4(fiery_rgb, 1.0), rim_t * rim_t * 0.62);
+            fill.a = max(prev_a, rim_t * 0.88);
         }
     }
 
@@ -697,6 +721,9 @@ void main() {
         } else if (has_fire_border) {
             float rim_noise = sample_warped_fire(px * 0.05, py * 0.05 + t_sec * 1.8);
             bc = blackbody_fire_color(clamp(0.55 + rim_noise * 0.45, 0.0, 1.0));
+        } else if (has_pulsing_fiery_border) {
+            vec3 fiery_rgb = evaluate_pulsing_rotating_fiery_border(uv_x, uv_y, t_sec);
+            bc = vec4(fiery_rgb, max(inst.border_color.a, 0.92));
         }
         float next_a = max(fill.a, bc.a);
         fill = mix(fill, bc, bc.a);

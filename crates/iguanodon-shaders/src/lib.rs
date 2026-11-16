@@ -109,6 +109,7 @@ pub enum BorderShaderEffect {
     None = 0,
     FireBorder = 1,
     GentleSmokeBorder = 2,
+    PulsingFieryBorder = 3,
 }
 
 /// Packs a [`ShaderMaterialId`] and a [`BorderShaderEffect`] into a single `f32` slot (`params[3]`).
@@ -128,6 +129,7 @@ pub const fn unpack_material_and_border(raw: f32) -> (u32, BorderShaderEffect) {
     let border = match v / 100 {
         1 => BorderShaderEffect::FireBorder,
         2 => BorderShaderEffect::GentleSmokeBorder,
+        3 => BorderShaderEffect::PulsingFieryBorder,
         _ => BorderShaderEffect::None,
     };
     (mat, border)
@@ -1171,27 +1173,27 @@ pub fn evaluate_electric_jellyfish_backdrop(
     let px = uv_x * w;
     let py = uv_y * h;
 
-    // 1. Deep abyssal bioluminescent ocean base gradient (Dark) or rich marine-sky blue gradient (Light)
+    // 1. Deep volcanic-crimson abyssal ocean base gradient (Dark) or rich ruby-coral gradient (Light)
     let diag_t = ((uv_x + uv_y) * 0.5).clamp(0.0, 1.0);
     let mut rgb = if dark_theme {
         sample_4stop_linear(
             diag_t,
-            [0x04 as f32 / 255.0, 0x0A as f32 / 255.0, 0x18 as f32 / 255.0],
-            [0x07 as f32 / 255.0, 0x14 as f32 / 255.0, 0x2B as f32 / 255.0],
-            [0x0A as f32 / 255.0, 0x1D as f32 / 255.0, 0x3B as f32 / 255.0],
-            [0x05 as f32 / 255.0, 0x0E as f32 / 255.0, 0x20 as f32 / 255.0],
+            [26.0 / 255.0, 5.0 / 255.0, 10.0 / 255.0],
+            [46.0 / 255.0, 8.0 / 255.0, 16.0 / 255.0],
+            [64.0 / 255.0, 12.0 / 255.0, 22.0 / 255.0],
+            [34.0 / 255.0, 6.0 / 255.0, 13.0 / 255.0],
         )
     } else {
         sample_4stop_linear(
             diag_t,
-            [0x56 as f32 / 255.0, 0xA0 as f32 / 255.0, 0xEB as f32 / 255.0],
-            [0x42 as f32 / 255.0, 0x8C as f32 / 255.0, 0xE0 as f32 / 255.0],
-            [0x4E as f32 / 255.0, 0x98 as f32 / 255.0, 0xE8 as f32 / 255.0],
-            [0x68 as f32 / 255.0, 0xB1 as f32 / 255.0, 0xF6 as f32 / 255.0],
+            [235.0 / 255.0, 96.0 / 255.0, 104.0 / 255.0],
+            [224.0 / 255.0, 74.0 / 255.0, 86.0 / 255.0],
+            [232.0 / 255.0, 88.0 / 255.0, 98.0 / 255.0],
+            [246.0 / 255.0, 114.0 / 255.0, 122.0 / 255.0],
         )
     };
 
-    // 2. Five slowly drifting, gently pulsing bioluminescent jellyfish light blooms behind blurry glass (no tendrils/legs)
+    // 2. Five slowly drifting, gently pulsing bioluminescent crimson/fiery jellyfish blooms behind blurry glass
     struct JellyBloom {
         base_x: f32,
         base_y: f32,
@@ -1215,9 +1217,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 speed_mul: 1.0,
                 phase_offset: 0.0,
                 radius_factor: 0.48,
-                core: [0.00, 0.96, 1.00], // 0xFF00F5FF
-                mid: [0.00, 0.57, 0.92],  // 0xFF0091EA
-                rim: [0.19, 0.31, 1.00],  // 0xFF304FFE
+                core: [1.00, 0.24, 0.28],
+                mid: [0.92, 0.06, 0.18],
+                rim: [0.68, 0.02, 0.14],
             },
             JellyBloom {
                 base_x: 0.76,
@@ -1227,9 +1229,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 speed_mul: -0.8,
                 phase_offset: 1.4,
                 radius_factor: 0.44,
-                core: [0.49, 0.30, 1.00], // 0xFF7C4DFF
-                mid: [0.00, 0.69, 1.00],  // 0xFF00B0FF
-                rim: [0.00, 0.90, 1.00],  // 0xFF00E5FF
+                core: [1.00, 0.44, 0.18],
+                mid: [0.96, 0.16, 0.14],
+                rim: [0.82, 0.04, 0.20],
             },
             JellyBloom {
                 base_x: 0.52,
@@ -1239,9 +1241,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 speed_mul: 0.9,
                 phase_offset: 2.7,
                 radius_factor: 0.54,
-                core: [0.09, 1.00, 1.00], // 0xFF18FFFF
-                mid: [0.16, 0.38, 1.00],  // 0xFF2962FF
-                rim: [0.67, 0.00, 1.00],  // 0xFFAA00FF
+                core: [1.00, 0.28, 0.36],
+                mid: [0.88, 0.08, 0.22],
+                rim: [0.62, 0.00, 0.24],
             },
             JellyBloom {
                 base_x: 0.18,
@@ -1251,9 +1253,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 speed_mul: 1.1,
                 phase_offset: 4.1,
                 radius_factor: 0.40,
-                core: [0.39, 1.00, 0.85], // 0xFF64FFDA
-                mid: [0.00, 0.72, 0.83],  // 0xFF00B8D4
-                rim: [0.24, 0.35, 1.00],  // 0xFF3D5AFE
+                core: [1.00, 0.54, 0.22],
+                mid: [0.94, 0.20, 0.12],
+                rim: [0.75, 0.05, 0.16],
             },
             JellyBloom {
                 base_x: 0.84,
@@ -1263,9 +1265,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 speed_mul: -1.0,
                 phase_offset: 5.2,
                 radius_factor: 0.46,
-                core: [0.88, 0.25, 0.98], // 0xFFE040FB
-                mid: [0.33, 0.43, 1.00],  // 0xFF536DFE
-                rim: [0.00, 0.90, 1.00],  // 0xFF00E5FF
+                core: [0.98, 0.18, 0.42],
+                mid: [0.86, 0.08, 0.26],
+                rim: [0.95, 0.24, 0.18],
             },
         ]
     } else {
@@ -1279,8 +1281,8 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 phase_offset: 0.0,
                 radius_factor: 0.48,
                 core: [1.00, 1.00, 1.00],
-                mid: [0.50, 0.97, 1.00],
-                rim: [0.09, 1.00, 1.00],
+                mid: [1.00, 0.54, 0.58],
+                rim: [0.96, 0.16, 0.24],
             },
             JellyBloom {
                 base_x: 0.76,
@@ -1290,9 +1292,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 speed_mul: -0.8,
                 phase_offset: 1.4,
                 radius_factor: 0.44,
-                core: [0.91, 0.87, 1.00],
-                mid: [0.51, 0.69, 1.00],
-                rim: [0.00, 0.90, 1.00],
+                core: [1.00, 0.90, 0.86],
+                mid: [1.00, 0.58, 0.44],
+                rim: [0.92, 0.18, 0.14],
             },
             JellyBloom {
                 base_x: 0.52,
@@ -1303,8 +1305,8 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 phase_offset: 2.7,
                 radius_factor: 0.54,
                 core: [1.00, 1.00, 1.00],
-                mid: [0.39, 1.00, 0.85],
-                rim: [0.33, 0.43, 1.00],
+                mid: [1.00, 0.46, 0.54],
+                rim: [0.84, 0.12, 0.28],
             },
             JellyBloom {
                 base_x: 0.18,
@@ -1314,9 +1316,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 speed_mul: 1.1,
                 phase_offset: 4.1,
                 radius_factor: 0.40,
-                core: [0.88, 1.00, 0.98],
-                mid: [0.39, 1.00, 0.85],
-                rim: [0.00, 0.69, 1.00],
+                core: [1.00, 0.95, 0.88],
+                mid: [1.00, 0.62, 0.42],
+                rim: [0.90, 0.22, 0.14],
             },
             JellyBloom {
                 base_x: 0.84,
@@ -1326,9 +1328,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
                 speed_mul: -1.0,
                 phase_offset: 5.2,
                 radius_factor: 0.46,
-                core: [0.97, 0.73, 0.82],
-                mid: [0.50, 0.85, 1.00],
-                rim: [0.09, 1.00, 1.00],
+                core: [1.00, 0.82, 0.86],
+                mid: [0.98, 0.50, 0.58],
+                rim: [0.94, 0.18, 0.26],
             },
         ]
     };
@@ -1387,9 +1389,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
             let u = uv_y * 2.0;
             (
                 [
-                    (0x07 as f32 + (0x09 as f32 - 0x07 as f32) * u) / 255.0,
-                    (0x13 as f32 + (0x19 as f32 - 0x13 as f32) * u) / 255.0,
-                    (0x26 as f32 + (0x33 as f32 - 0x26 as f32) * u) / 255.0,
+                    (38.0 + (51.0 - 38.0) * u) / 255.0,
+                    (7.0 + (9.0 - 7.0) * u) / 255.0,
+                    (14.0 + (20.0 - 14.0) * u) / 255.0,
                 ],
                 0.28 + (0.22 - 0.28) * u,
             )
@@ -1397,9 +1399,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
             let u = (uv_y - 0.5) * 2.0;
             (
                 [
-                    (0x09 as f32 + (0x06 as f32 - 0x09 as f32) * u) / 255.0,
-                    (0x19 as f32 + (0x10 as f32 - 0x19 as f32) * u) / 255.0,
-                    (0x33 as f32 + (0x22 as f32 - 0x33 as f32) * u) / 255.0,
+                    (51.0 + (34.0 - 51.0) * u) / 255.0,
+                    (9.0 + (6.0 - 9.0) * u) / 255.0,
+                    (20.0 + (13.0 - 20.0) * u) / 255.0,
                 ],
                 0.22 + (0.30 - 0.22) * u,
             )
@@ -1408,9 +1410,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
         let u = uv_y * 2.0;
         (
             [
-                (0xD6 as f32 + (0xC4 as f32 - 0xD6 as f32) * u) / 255.0,
-                (0xEC as f32 + (0xE4 as f32 - 0xEC as f32) * u) / 255.0,
                 1.0,
+                (214.0 + (196.0 - 214.0) * u) / 255.0,
+                (220.0 + (206.0 - 220.0) * u) / 255.0,
             ],
             0.18 + (0.14 - 0.18) * u,
         )
@@ -1418,9 +1420,9 @@ pub fn evaluate_electric_jellyfish_backdrop(
         let u = (uv_y - 0.5) * 2.0;
         (
             [
-                (0xC4 as f32 + (0xD6 as f32 - 0xC4 as f32) * u) / 255.0,
-                (0xE4 as f32 + (0xEC as f32 - 0xE4 as f32) * u) / 255.0,
                 1.0,
+                (196.0 + (214.0 - 196.0) * u) / 255.0,
+                (206.0 + (220.0 - 206.0) * u) / 255.0,
             ],
             0.14 + (0.20 - 0.14) * u,
         )
@@ -1431,6 +1433,24 @@ pub fn evaluate_electric_jellyfish_backdrop(
     rgb[1] = (rgb[1] * inv_v + veil_col[1] * veil_a).clamp(0.0, 1.0);
     rgb[2] = (rgb[2] * inv_v + veil_col[2] * veil_a).clamp(0.0, 1.0);
 
+    Color::rgba(rgb[0], rgb[1], rgb[2], 1.0)
+}
+
+#[inline]
+pub fn evaluate_pulsing_rotating_fiery_border(uv_x: f32, uv_y: f32, t_sec: f32) -> Color {
+    let tau = std::f32::consts::TAU;
+    let angle_turn = (uv_y - 0.5).atan2(uv_x - 0.5) / tau + 0.5;
+    let rot_phase = (angle_turn - t_sec * 0.14).rem_euclid(1.0);
+    let rot_wave = 0.5 + 0.5 * (rot_phase * tau).cos();
+    let pulse = 0.78 + 0.22 * (t_sec * 1.45 + (uv_x + uv_y) * 2.4).sin();
+    let heat = (0.18 + rot_wave * 0.62 * pulse + (pulse - 0.78) * 0.65).clamp(0.0, 1.0);
+    let rgb = sample_4stop_linear(
+        heat,
+        [0.76, 0.09, 0.12],
+        [0.96, 0.24, 0.08],
+        [1.00, 0.54, 0.10],
+        [1.00, 0.84, 0.28],
+    );
     Color::rgba(rgb[0], rgb[1], rgb[2], 1.0)
 }
 
@@ -1576,9 +1596,15 @@ pub fn evaluate_sdf_instance_foreground(
     let has_fire_border = border_effect == BorderShaderEffect::FireBorder
         || material_id == ShaderMaterialId::ProceduralFire as u32
         || (!has_smoke_border
+            && border_effect != BorderShaderEffect::PulsingFieryBorder
             && border_w > 0.0
             && (material_id == ShaderMaterialId::ObsidianNeonPulse as u32
-                || (inst.border_color[0] > 0.9 && inst.border_color[1] < 0.35)));
+                || (inst.border_color[0] > 0.9 && inst.border_color[1] < 0.20)));
+    let has_pulsing_fiery_border = border_effect == BorderShaderEffect::PulsingFieryBorder
+        || (!has_smoke_border
+            && !has_fire_border
+            && border_w > 0.0
+            && material_id != ShaderMaterialId::StandardSdf as u32);
 
     // Outside the SDF boundary: evaluate consistent analytic drop shadow + optional external fire/smoke/glowbar corona
     if dist > 0.5 {
@@ -1907,7 +1933,7 @@ pub fn evaluate_sdf_instance_foreground(
         _ => {}
     }
 
-    // Interior rim & border stroke for GentleSmokeBorder or FireBorder
+    // Interior rim & border stroke for GentleSmokeBorder, FireBorder, or PulsingFieryBorder
     if border_w > 0.0 && dist > -border_w - 5.5 {
         if has_smoke_border {
             let lut = FireSimulationLut::global();
@@ -1934,6 +1960,12 @@ pub fn evaluate_sdf_instance_foreground(
             let prev_a = fill.a;
             fill = fill.lerp(fire_col, (rim_t * 0.92).clamp(0.0, 1.0));
             fill.a = prev_a.max(rim_t * 0.95);
+        } else if has_pulsing_fiery_border && dist > -border_w - 3.5 {
+            let rim_t = (1.0 - ((-dist) / (border_w + 3.5)).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+            let fiery_col = evaluate_pulsing_rotating_fiery_border(uv_x, uv_y, t_sec);
+            let prev_a = fill.a;
+            fill = fill.lerp(fiery_col, (rim_t * rim_t * 0.62).clamp(0.0, 1.0));
+            fill.a = prev_a.max(rim_t * 0.88);
         }
     }
 
@@ -1955,6 +1987,10 @@ pub fn evaluate_sdf_instance_foreground(
             let lut = FireSimulationLut::global();
             let rim_noise = lut.sample_warped_fire(px * 0.05, py * 0.05 + t_sec * 1.8);
             bc = lut.lookup_blackbody((0.55 + rim_noise * 0.45).clamp(0.0, 1.0));
+        } else if has_pulsing_fiery_border {
+            let mut fiery = evaluate_pulsing_rotating_fiery_border(uv_x, uv_y, t_sec);
+            fiery.a = inst.border_color[3].max(0.92);
+            bc = fiery;
         }
         let next_a = fill.a.max(bc.a);
         fill = fill.lerp(bc, bc.a);
@@ -2100,6 +2136,6 @@ mod tests {
         let mut scanline = vec![0u8; 1920 * 4];
         field.fill_scanline_rgba(540, 1920, &mut scanline);
         assert_eq!(scanline[3], 255);
-        assert!(scanline[2] > scanline[0], "Abyssal ocean backdrop should be blue-dominant");
+        assert!(scanline[0] > scanline[2], "Crimson Electric Jellyfish backdrop should be red-dominant");
     }
 }

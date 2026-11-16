@@ -2964,7 +2964,13 @@ impl VulkanRenderer {
             ([q_min_x, q_min_y], [q_max_x, q_max_y])
         } else {
             let mut halo = inst.params[1] * 2.5 + inst.params[0] + 3.0;
-            if border_fx != 0 || mat == 2 || mat == 5 || mat == 7 || mat == 10 {
+            let ext_halo = border_fx == 1
+                || border_fx == 2
+                || mat == 2
+                || mat == 5
+                || mat == 7
+                || mat == 10;
+            if ext_halo {
                 halo = halo.max(32.0);
             }
             let q_min_x = inst.rect[0] - halo;
@@ -2980,7 +2986,7 @@ impl VulkanRenderer {
                 && (inst.clip_rect[1] - inst.rect[1]).abs() < 1.0
                 && (inst.clip_rect[2] - inst.rect[2]).abs() < 1.0
                 && (inst.clip_rect[3] - inst.rect[3]).abs() < 1.0;
-            if clip_is_self && (border_fx != 0 || mat == 2 || mat == 5 || mat == 7 || mat == 10) {
+            if clip_is_self && ext_halo {
                 c_min_x -= 32.0;
                 c_min_y -= 32.0;
                 c_max_x += 32.0;

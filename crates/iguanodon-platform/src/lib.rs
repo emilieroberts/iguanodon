@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn test_standard_benchmark_suite_execution() {
         let report = run_standard_benchmark_suite(5);
-        assert_eq!(report.total_frames_rendered, 20);
+        assert_eq!(report.total_frames_rendered, 5 * ThemeId::ALL.len());
         assert!(report.hardware_vulkan_active);
         assert_eq!(report.lazy_list_total_items, 10_000);
         assert!(report.materialized_scene_nodes < 60);

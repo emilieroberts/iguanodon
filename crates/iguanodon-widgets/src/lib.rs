@@ -373,7 +373,7 @@ pub struct StandardBenchmarkApp {
     pub pointer_pos: Point,
     pub time_sec: f32,
 
-    // 1. Labels & 2. Buttons state (including Jello Wobble click springs)
+    // 1. Labels & 2. Buttons state (including Jello Wobble & Smoke-on-Press springs)
     pub headline_text: String,
     pub status_label_text: String,
     pub button_click_count: u32,
@@ -381,6 +381,9 @@ pub struct StandardBenchmarkApp {
     pub button_press_spring: SpringValue,
     pub button_jello_spring: SpringValue,
     pub shader_btn_jello_spring: SpringValue,
+    pub top_btn_jello_spring: SpringValue,
+    pub button_smoke_spring: SpringValue,
+    pub last_pressed_button: Option<NodeId>,
 
     // 3. Scrollable Text state (with elastic overspring bounce)
     pub scrollable_document: String,
@@ -436,7 +439,7 @@ impl Default for StandardBenchmarkApp {
 
 impl StandardBenchmarkApp {
     pub fn new(width: f32, height: f32) -> Self {
-        let theme = ThemeDescriptor::material3_expressive();
+        let theme = ThemeDescriptor::iguanodon_default();
         let doc = concat!(
             "Iguanodon Vulkan UI Toolkit — Scrollable Document Log\n",
             "• Zero-jank ahead-of-time SPIR-V shader compilation via naga.\n",
@@ -449,18 +452,18 @@ impl StandardBenchmarkApp {
         )
         .to_string();
 
-        let text_layout = MultilineTextLayout::shape(&doc, 18.0, 1.35, 340.0);
+        let text_layout = MultilineTextLayout::shape(&doc, 19.0, 1.42, 340.0);
         let scroll_viewport = Rect::new(0.0, 0.0, 360.0, 160.0);
         let text_sb = ScrollbarMetrics::compute(scroll_viewport, text_layout.total_height, 0.0);
 
         let lazy_vp = Rect::new(0.0, 0.0, 360.0, 680.0);
         let lazy_layout =
-            LazyListLayout::compute(lazy_vp, 10_000, MIN_TOUCH_TARGET_DP, 4.0, 0.0, 2);
+            LazyListLayout::compute(lazy_vp, 10_000, MIN_TOUCH_TARGET_DP, 6.0, 0.0, 2);
 
         let mut app = Self {
             viewport: Rect::new(0.0, 0.0, width, height),
             safe_insets: [0.0; 4],
-            active_theme_id: ThemeId::Material3Expressive,
+            active_theme_id: ThemeId::IguanodonDefault,
             active_theme_mode: ThemeMode::Dark,
             power_mode: PowerMode::Performance,
             frame_rate_limit: FrameRateLimit::Fps120,
@@ -473,22 +476,25 @@ impl StandardBenchmarkApp {
             time_sec: 0.0,
 
             headline_text: "Iguanodon Studio — Standard Benchmark App".to_string(),
-            status_label_text: "Ready (Material 3 Expressive)".to_string(),
+            status_label_text: "Ready (Iguanodon Crimson Jellyfish)".to_string(),
             button_click_count: 0,
             fire_shader_enabled: true,
             button_press_spring: SpringValue::new(0.0, theme.motion.fast_spatial),
-            button_jello_spring: SpringValue::new(0.0, SpringSpec::new(0.22, 680.0)),
-            shader_btn_jello_spring: SpringValue::new(0.0, SpringSpec::new(0.22, 680.0)),
+            button_jello_spring: SpringValue::new(0.0, SpringSpec::new(0.24, 680.0)),
+            shader_btn_jello_spring: SpringValue::new(0.0, SpringSpec::new(0.24, 680.0)),
+            top_btn_jello_spring: SpringValue::new(0.0, SpringSpec::new(0.26, 680.0)),
+            button_smoke_spring: SpringValue::new(0.0, SpringSpec::new(0.85, 180.0)),
+            last_pressed_button: None,
 
             scrollable_document: doc,
             scrollable_text_scroll_y: 0.0,
-            scrollable_text_overscroll_spring: SpringValue::new(0.0, SpringSpec::new(0.52, 420.0)),
+            scrollable_text_overscroll_spring: SpringValue::new(0.0, SpringSpec::new(0.42, 420.0)),
             scrollable_text_layout: text_layout,
             scrollable_text_scrollbar: text_sb,
 
             lazy_total_items: 10_000,
             lazy_scroll_y: 0.0,
-            lazy_overscroll_spring: SpringValue::new(0.0, SpringSpec::new(0.52, 420.0)),
+            lazy_overscroll_spring: SpringValue::new(0.0, SpringSpec::new(0.42, 420.0)),
             lazy_layout,
             selected_lazy_item: None,
 
@@ -565,10 +571,11 @@ impl StandardBenchmarkApp {
 
     pub fn cycle_theme(&mut self) {
         let next = match self.active_theme_id {
+            ThemeId::IguanodonDefault => ThemeId::Material3Expressive,
             ThemeId::Material3Expressive => ThemeId::WindowsFluent2,
             ThemeId::WindowsFluent2 => ThemeId::IosLiquidGlass,
             ThemeId::IosLiquidGlass => ThemeId::LinuxEliteObsidian,
-            ThemeId::LinuxEliteObsidian => ThemeId::Material3Expressive,
+            ThemeId::LinuxEliteObsidian => ThemeId::IguanodonDefault,
         };
         self.set_theme(next);
     }
@@ -1301,13 +1308,13 @@ impl StandardBenchmarkApp {
         self.layout.set_children(ROOT, vec![TOP_BAR, MAIN_ROW]);
         self.layout.compute_layout(ROOT, safe_rect);
 
-        // Update ScrollableText (21px Roboto font) & LazyColumn (48dp item height) viewport metrics
+        // Update ScrollableText (22px Roboto font, generous line-height & padding) & LazyColumn (48dp item height, 6dp gap) viewport metrics
         if let Some(st_rect) = self.layout.bounds(SCROLLABLE_TEXT) {
             self.scrollable_text_layout = MultilineTextLayout::shape(
                 &self.scrollable_document,
                 21.0,
-                1.35,
-                (st_rect.width - 24.0).max(80.0),
+                1.42,
+                (st_rect.width - 28.0).max(80.0),
             );
             self.scrollable_text_scrollbar = ScrollbarMetrics::compute(
                 st_rect,
@@ -1322,7 +1329,7 @@ impl StandardBenchmarkApp {
                 lazy_rect,
                 self.lazy_total_items,
                 MIN_TOUCH_TARGET_DP,
-                4.0,
+                6.0,
                 self.lazy_scroll_y,
                 2,
             );
@@ -1348,6 +1355,8 @@ impl StandardBenchmarkApp {
         self.button_press_spring.step(dt);
         self.button_jello_spring.step(dt);
         self.shader_btn_jello_spring.step(dt);
+        self.top_btn_jello_spring.step(dt);
+        self.button_smoke_spring.step(dt);
         self.scrollable_text_overscroll_spring.step(dt);
         self.lazy_overscroll_spring.step(dt);
         self.progress_spring.step(dt);
@@ -1362,6 +1371,8 @@ impl StandardBenchmarkApp {
             || !self.button_press_spring.is_settled()
             || !self.button_jello_spring.is_settled()
             || !self.shader_btn_jello_spring.is_settled()
+            || !self.top_btn_jello_spring.is_settled()
+            || !self.button_smoke_spring.is_settled()
             || !self.scrollable_text_overscroll_spring.is_settled()
             || !self.lazy_overscroll_spring.is_settled()
             || !self.progress_spring.is_settled()
@@ -1375,8 +1386,8 @@ impl StandardBenchmarkApp {
     /// from an underdamped spring displacement (`jello_val`).
     #[inline]
     pub fn apply_jello_wobble(r: Rect, jello_val: f32) -> [f32; 4] {
-        let sx = (1.0 + jello_val * 0.085).clamp(0.82, 1.22);
-        let sy = (1.0 - jello_val * 0.14).clamp(0.78, 1.24);
+        let sx = (1.0 + jello_val * 0.055).clamp(0.86, 1.16);
+        let sy = (1.0 - jello_val * 0.085).clamp(0.84, 1.18);
         let w = r.width * sx;
         let h = r.height * sy;
         [
@@ -1429,6 +1440,9 @@ impl StandardBenchmarkApp {
             ShaderMaterialId::StandardSdf
         } else {
             match th.interaction_shader {
+                InteractionShaderKind::IguanodonFieryPulse => {
+                    ShaderMaterialId::SubtleGlassReflection
+                }
                 InteractionShaderKind::MaterialRipple => ShaderMaterialId::StandardSdf,
                 InteractionShaderKind::FluentRevealHighlight => {
                     ShaderMaterialId::FluentRevealHighlight
@@ -1484,7 +1498,7 @@ impl StandardBenchmarkApp {
                 } else if panel == TOP_BAR || panel == MID_COL {
                     BorderShaderEffect::GentleSmokeBorder
                 } else {
-                    BorderShaderEffect::None
+                    BorderShaderEffect::PulsingFieryBorder
                 };
                 let panel_border_effect = filter_border(raw_border);
                 out.push(SdfPrimitiveInstance {
@@ -1509,6 +1523,13 @@ impl StandardBenchmarkApp {
             }
         }
 
+        // Helper for emitting a transient gentle smoke puff on whichever button was just pressed
+        let smoke_puff_val = if !is_compose_ui && !is_eco {
+            self.button_smoke_spring.value
+        } else {
+            0.0
+        };
+
         // 1. Labels & 2. Buttons (including Renderer Backend & Power Mode toggles in TOP_BAR)
         for &top_btn in &[RENDERER_BTN, POWER_BTN, THEME_BTN, MODE_BTN] {
             if let Some(r) = self.layout.bounds(top_btn) {
@@ -1519,8 +1540,19 @@ impl StandardBenchmarkApp {
                 } else {
                     th.colors.surface_container.with_alpha(elem_alpha).to_array()
                 };
+                let is_pressed_btn = self.last_pressed_button == Some(top_btn);
+                let btn_rect = if is_compose_ui || !is_pressed_btn {
+                    r.to_array()
+                } else {
+                    Self::apply_jello_wobble(r, self.top_btn_jello_spring.value)
+                };
+                let top_border = if is_pressed_btn && smoke_puff_val > 0.08 {
+                    BorderShaderEffect::GentleSmokeBorder
+                } else {
+                    BorderShaderEffect::PulsingFieryBorder
+                };
                 out.push(SdfPrimitiveInstance {
-                    rect: r.to_array(),
+                    rect: btn_rect,
                     corner_radii: [th.shapes.radius_sm; 4],
                     clip_rect: full_clip,
                     fill_color_start: fill_start,
@@ -1528,13 +1560,10 @@ impl StandardBenchmarkApp {
                     border_color: th.colors.accent_glow.to_array(),
                     shadow_color: [0.0, 0.0, 0.0, 0.35],
                     params: [
-                        th.shapes.border_width,
+                        th.shapes.border_width.max(1.4),
                         if is_eco { 2.0 } else { 6.0 },
                         p,
-                        pack_material_and_border(
-                            subtle_glass_mat,
-                            filter_border(BorderShaderEffect::GentleSmokeBorder),
-                        ),
+                        pack_material_and_border(subtle_glass_mat, filter_border(top_border)),
                     ],
                 });
             }
@@ -1548,6 +1577,17 @@ impl StandardBenchmarkApp {
             } else {
                 Self::apply_jello_wobble(r, self.button_jello_spring.value)
             };
+            let is_smoking = self.last_pressed_button == Some(PRIMARY_BTN) && smoke_puff_val > 0.08;
+            let btn_mat = if is_smoking {
+                ShaderMaterialId::GentleSmoke
+            } else {
+                subtle_glass_mat
+            };
+            let btn_border = if is_smoking {
+                BorderShaderEffect::GentleSmokeBorder
+            } else {
+                BorderShaderEffect::FireBorder
+            };
             out.push(SdfPrimitiveInstance {
                 rect: btn_rect,
                 corner_radii: [morph_r.max(4.0); 4],
@@ -1560,19 +1600,25 @@ impl StandardBenchmarkApp {
                     th.shapes.border_width.max(1.5),
                     8.0,
                     p,
-                    pack_material_and_border(
-                        subtle_glass_mat,
-                        filter_border(BorderShaderEffect::FireBorder),
-                    ),
+                    pack_material_and_border(btn_mat, filter_border(btn_border)),
                 ],
             });
         }
 
         if let Some(r) = self.layout.bounds(FIRE_SHADER_BTN) {
-            let mat = if self.fire_shader_enabled && !is_compose_ui && !is_eco {
+            let is_smoking =
+                self.last_pressed_button == Some(FIRE_SHADER_BTN) && smoke_puff_val > 0.08;
+            let mat = if is_smoking {
+                ShaderMaterialId::GentleSmoke
+            } else if self.fire_shader_enabled && !is_compose_ui && !is_eco {
                 ShaderMaterialId::ProceduralFire
             } else {
                 subtle_glass_mat
+            };
+            let btn_border = if is_smoking {
+                BorderShaderEffect::GentleSmokeBorder
+            } else {
+                BorderShaderEffect::FireBorder
             };
             let btn_rect = if is_compose_ui {
                 r.to_array()
@@ -1591,10 +1637,7 @@ impl StandardBenchmarkApp {
                     1.5,
                     12.0,
                     p,
-                    pack_material_and_border(
-                        mat,
-                        filter_border(BorderShaderEffect::FireBorder),
-                    ),
+                    pack_material_and_border(mat, filter_border(btn_border)),
                 ],
             });
         }
@@ -1649,6 +1692,7 @@ impl StandardBenchmarkApp {
         // 4. LazyColumn (10,000 items -> only visible slice materialized!) + Scrollbar + Overspring Bounce
         if let Some(r) = self.layout.bounds(LAZY_COLUMN) {
             let overscroll_y = self.lazy_overscroll_spring.value;
+            let default_item_border = filter_border(BorderShaderEffect::PulsingFieryBorder);
             for item_idx in self.lazy_layout.visible_range.clone() {
                 let mut item_r = self.lazy_layout.item_rect(r, item_idx);
                 item_r.y -= overscroll_y;
@@ -1666,7 +1710,12 @@ impl StandardBenchmarkApp {
                     fill_color_end: th.colors.surface_container.with_alpha(elem_alpha).to_array(),
                     border_color: th.colors.outline.to_array(),
                     shadow_color: [0.0; 4],
-                    params: [th.shapes.border_width, 0.0, p, subtle_glass_mat as u32 as f32],
+                    params: [
+                        th.shapes.border_width,
+                        0.0,
+                        p,
+                        pack_material_and_border(subtle_glass_mat, default_item_border),
+                    ],
                 });
             }
             if overscroll_y.abs() > 1.0 {
@@ -2014,12 +2063,15 @@ impl StandardBenchmarkApp {
                     },
                     0.0,
                     p,
-                    subtle_glass_mat as u32 as f32,
+                    pack_material_and_border(
+                        subtle_glass_mat,
+                        filter_border(BorderShaderEffect::PulsingFieryBorder),
+                    ),
                 ],
             });
             if self.text_field.focused && self.text_field.caret_blink_phase < 0.5 {
                 let caret_x =
-                    r.x + 10.0 + (self.text_field.cursor_byte.min(32) as f32) * 7.5;
+                    r.x + 14.0 + (self.text_field.cursor_byte.min(32) as f32) * 8.0;
                 out.push(SdfPrimitiveInstance {
                     rect: [caret_x, r.y + 8.0, 2.0, r.height - 16.0],
                     corner_radii: [1.0; 4],
@@ -2140,7 +2192,15 @@ impl StandardBenchmarkApp {
                 fill_color_end: th.colors.background.with_alpha(elem_alpha).to_array(),
                 border_color: th.colors.accent_glow.to_array(),
                 shadow_color: [0.0; 4],
-                params: [th.shapes.border_width, 4.0, p, overlay_mat as u32 as f32],
+                params: [
+                    th.shapes.border_width,
+                    4.0,
+                    p,
+                    pack_material_and_border(
+                        overlay_mat,
+                        filter_border(BorderShaderEffect::PulsingFieryBorder),
+                    ),
+                ],
             });
         }
 
@@ -3419,6 +3479,10 @@ pub struct ApplierSceneGraph {
     pub hovered_node_id: Option<u64>,
     pub focused_node_id: Option<u64>,
     pub active_drag_node_id: Option<(u64, Point)>,
+    pub pressed_node_id: Option<u64>,
+    pub press_jello_spring: SpringValue,
+    pub press_smoke_spring: SpringValue,
+    pub scroll_overshoot_spring: SpringValue,
 }
 
 impl Default for ApplierSceneGraph {
@@ -3437,7 +3501,17 @@ impl ApplierSceneGraph {
             hovered_node_id: None,
             focused_node_id: None,
             active_drag_node_id: None,
+            pressed_node_id: None,
+            press_jello_spring: SpringValue::new(0.0, SpringSpec::new(0.24, 680.0)),
+            press_smoke_spring: SpringValue::new(0.0, SpringSpec::new(0.85, 180.0)),
+            scroll_overshoot_spring: SpringValue::new(0.0, SpringSpec::new(0.42, 420.0)),
         }
+    }
+
+    pub fn step_animations(&mut self, dt: f32) {
+        self.press_jello_spring.step(dt);
+        self.press_smoke_spring.step(dt);
+        self.scroll_overshoot_spring.step(dt);
     }
 
     pub fn ensure_node(&mut self, node_id: u64, kind: u8) -> &mut ApplierNode {
@@ -3721,6 +3795,8 @@ impl ApplierSceneGraph {
 
         if has_box {
             *widget_nodes += 1;
+            let is_pressed = self.pressed_node_id == Some(node_id);
+            let is_smoking = is_pressed && self.press_smoke_spring.value > 0.08;
             let fill_c = if node.visual.bg_rgba != 0 {
                 Color::from_hex(node.visual.bg_rgba)
             } else if node.kind == 5 {
@@ -3735,10 +3811,17 @@ impl ApplierSceneGraph {
             };
             let mat = if node.image.is_some() {
                 ShaderMaterialId::TexturedImage
+            } else if is_smoking {
+                ShaderMaterialId::GentleSmoke
             } else if node.shader.shader_id == 0 {
                 ShaderMaterialId::SubtleGlassReflection
             } else {
                 ShaderMaterialId::from_u32(node.shader.shader_id as u32)
+            };
+            let border_fx = if is_smoking {
+                BorderShaderEffect::GentleSmokeBorder
+            } else {
+                BorderShaderEffect::PulsingFieryBorder
             };
             let radius = if node.visual.corner_radius > 0.0 {
                 node.visual.corner_radius
@@ -3748,17 +3831,27 @@ impl ApplierSceneGraph {
             let bw = if node.visual.border_w > 0.0 {
                 node.visual.border_w
             } else {
-                1.0
+                theme.shapes.border_width.max(1.4)
+            };
+            let box_rect = if is_pressed {
+                StandardBenchmarkApp::apply_jello_wobble(b, self.press_jello_spring.value)
+            } else {
+                b.to_array()
             };
             out.push(SdfPrimitiveInstance {
-                rect: b.to_array(),
+                rect: box_rect,
                 corner_radii: [radius; 4],
                 clip_rect: node_clip.to_array(),
                 fill_color_start: fill_c.to_array(),
                 fill_color_end: fill_c.to_array(),
                 border_color: border_c.to_array(),
                 shadow_color: [0.0, 0.0, 0.0, 0.35],
-                params: [bw, 6.0, theme.shapes.shape_exponent_p, mat as u32 as f32],
+                params: [
+                    bw,
+                    6.0,
+                    theme.shapes.shape_exponent_p,
+                    pack_material_and_border(mat, border_fx),
+                ],
             });
         }
 
@@ -3772,10 +3865,10 @@ impl ApplierSceneGraph {
                     theme.colors.on_surface
                 };
                 let is_headline = txt.font_size_sp >= 20.0 || txt.font_weight >= 600;
-                let ty = b.y + ((b.height - if is_headline { 26.0 } else { 21.0 }) * 0.5).max(2.0);
+                let ty = b.y + ((b.height - if is_headline { 28.0 } else { 22.0 }) * 0.5).max(3.0);
                 push_gpu_text_glyphs(
                     out,
-                    Point::new(b.x + 10.0, ty),
+                    Point::new(b.x + 14.0, ty),
                     &txt.text,
                     col,
                     node_clip.intersect(&b),
@@ -3893,11 +3986,14 @@ impl IguanodonTestHarness {
         match node {
             PRIMARY_BTN => {
                 self.app.button_click_count += 1;
+                self.app.last_pressed_button = Some(PRIMARY_BTN);
                 self.app.button_press_spring.value = 1.0;
                 self.app.button_press_spring.set_target(0.0);
-                // Trigger underdamped jello click wobble (squash-and-stretch oscillation)
+                // Trigger underdamped jello click wobble & gentle smoke puff on press
                 self.app.button_jello_spring.value = 1.0;
                 self.app.button_jello_spring.set_target(0.0);
+                self.app.button_smoke_spring.value = 1.0;
+                self.app.button_smoke_spring.set_target(0.0);
                 let next_prog =
                     ((self.app.progress_spring.target + 0.2).fract()).clamp(0.1, 1.0);
                 self.app.progress_spring.set_target(next_prog);
@@ -3906,13 +4002,26 @@ impl IguanodonTestHarness {
             }
             FIRE_SHADER_BTN => {
                 self.app.fire_shader_enabled = !self.app.fire_shader_enabled;
+                self.app.last_pressed_button = Some(FIRE_SHADER_BTN);
                 self.app.shader_btn_jello_spring.value = 1.0;
                 self.app.shader_btn_jello_spring.set_target(0.0);
+                self.app.button_smoke_spring.value = 1.0;
+                self.app.button_smoke_spring.set_target(0.0);
             }
             THEME_BTN => {
+                self.app.last_pressed_button = Some(THEME_BTN);
+                self.app.top_btn_jello_spring.value = 1.0;
+                self.app.top_btn_jello_spring.set_target(0.0);
+                self.app.button_smoke_spring.value = 1.0;
+                self.app.button_smoke_spring.set_target(0.0);
                 self.app.cycle_theme();
             }
             MODE_BTN => {
+                self.app.last_pressed_button = Some(MODE_BTN);
+                self.app.top_btn_jello_spring.value = 1.0;
+                self.app.top_btn_jello_spring.set_target(0.0);
+                self.app.button_smoke_spring.value = 1.0;
+                self.app.button_smoke_spring.set_target(0.0);
                 self.app.toggle_theme_mode();
                 let mode_val = self.app.current_theme.mode as u32;
                 self.push_reverse_event(ReverseUiEvent {
@@ -3927,6 +4036,11 @@ impl IguanodonTestHarness {
                 });
             }
             POWER_BTN => {
+                self.app.last_pressed_button = Some(POWER_BTN);
+                self.app.top_btn_jello_spring.value = 1.0;
+                self.app.top_btn_jello_spring.set_target(0.0);
+                self.app.button_smoke_spring.value = 1.0;
+                self.app.button_smoke_spring.set_target(0.0);
                 self.app.toggle_power_mode();
                 let pwr_val = self.app.power_mode as u32;
                 let eff_fps = self.app.effective_frame_rate_limit().target_fps_or_zero();
@@ -3942,6 +4056,11 @@ impl IguanodonTestHarness {
                 });
             }
             RENDERER_BTN => {
+                self.app.last_pressed_button = Some(RENDERER_BTN);
+                self.app.top_btn_jello_spring.value = 1.0;
+                self.app.top_btn_jello_spring.set_target(0.0);
+                self.app.button_smoke_spring.value = 1.0;
+                self.app.button_smoke_spring.set_target(0.0);
                 self.app.toggle_renderer_backend();
                 let backend_val = self.app.renderer_backend as u32;
                 self.push_reverse_event(ReverseUiEvent {
@@ -4106,8 +4225,8 @@ impl IguanodonTestHarness {
     }
 
     /// Scrolls either `SCROLLABLE_TEXT` or `LAZY_COLUMN` by `delta_y` pixels.
-    /// When scrolling past `< 0.0` or `> max_scroll_y`, accumulates rubber-band displacement into
-    /// `scrollable_text_overscroll_spring` or `lazy_overscroll_spring` so the list bounces back smoothly.
+    /// Automatically injects a subtle bounce overshoot impulse on every scroll step and a
+    /// deeper rubber-band displacement when scrolling past `< 0.0` or `> max_scroll_y`.
     pub fn scroll_node(&mut self, node: NodeId, delta_y: f32) {
         use bench_nodes::*;
         match node {
@@ -4126,6 +4245,12 @@ impl IguanodonTestHarness {
                         (self.app.scrollable_text_overscroll_spring.value + excess * 0.55)
                             .clamp(-80.0, 80.0);
                     self.app.scrollable_text_overscroll_spring.set_target(0.0);
+                } else if delta_y.abs() > 0.5 {
+                    let bounce_impulse = (delta_y * 0.16).clamp(-14.0, 14.0);
+                    self.app.scrollable_text_overscroll_spring.value =
+                        (self.app.scrollable_text_overscroll_spring.value + bounce_impulse)
+                            .clamp(-40.0, 40.0);
+                    self.app.scrollable_text_overscroll_spring.set_target(0.0);
                 }
                 self.app.scrollable_text_scroll_y = unclamped.clamp(0.0, max_y);
                 self.app.rebuild_layout();
@@ -4142,6 +4267,12 @@ impl IguanodonTestHarness {
                     let excess = unclamped - max_y;
                     self.app.lazy_overscroll_spring.value =
                         (self.app.lazy_overscroll_spring.value + excess * 0.55).clamp(-96.0, 96.0);
+                    self.app.lazy_overscroll_spring.set_target(0.0);
+                } else if delta_y.abs() > 0.5 {
+                    let bounce_impulse = (delta_y * 0.16).clamp(-16.0, 16.0);
+                    self.app.lazy_overscroll_spring.value =
+                        (self.app.lazy_overscroll_spring.value + bounce_impulse)
+                            .clamp(-48.0, 48.0);
                     self.app.lazy_overscroll_spring.set_target(0.0);
                 }
                 self.app.lazy_scroll_y = unclamped.clamp(0.0, max_y);
@@ -4302,6 +4433,11 @@ impl IguanodonTestHarness {
             {
                 if click_id >= 100 {
                     self.applier_scene.focused_node_id = Some(click_id);
+                    self.applier_scene.pressed_node_id = Some(click_id);
+                    self.applier_scene.press_jello_spring.value = 1.0;
+                    self.applier_scene.press_jello_spring.set_target(0.0);
+                    self.applier_scene.press_smoke_spring.value = 1.0;
+                    self.applier_scene.press_smoke_spring.set_target(0.0);
                     self.push_reverse_event(ReverseUiEvent {
                         event_type: ReverseEventType::Click,
                         flags: 0,
@@ -4545,6 +4681,7 @@ impl IguanodonTestHarness {
         let frame_start = Instant::now();
         self.resize(width as f32, height as f32);
         self.app.step_animations(dt);
+        self.applier_scene.step_animations(dt);
 
         let layout_start = Instant::now();
         self.app.rebuild_layout();
@@ -4607,6 +4744,7 @@ impl IguanodonTestHarness {
         if self.applier_scene.is_custom_app_scene() {
             let frame_start = Instant::now();
             self.app.step_animations(dt);
+        self.applier_scene.step_animations(dt);
             let layout_start = Instant::now();
             self.applier_scene
                 .recompute_layout(width as f32, height as f32);
@@ -5058,5 +5196,44 @@ mod tests {
         assert_eq!(harness.app.effective_frame_rate_limit(), FrameRateLimit::Fps15);
         assert_eq!(harness.app.effective_target_fps(), Some(15));
         assert!((harness.app.target_frame_interval_sec() - (1.0 / 15.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_iguanodon_default_theme_red_jellyfish_fiery_borders_and_smoking_buttons() {
+        let mut harness = IguanodonTestHarness::new(1280.0, 800.0);
+        // 1. Default theme is IguanodonDefault
+        assert_eq!(harness.app.active_theme_id, ThemeId::IguanodonDefault);
+        assert_eq!(harness.app.current_theme.id, ThemeId::IguanodonDefault);
+
+        // 2. Red-themed Electric Jellyfish background (red > blue)
+        let bg_col = iguanodon_shaders::evaluate_electric_jellyfish_backdrop(
+            0.5, 0.5, 1280.0, 800.0, 1.0, true,
+        );
+        assert!(bg_col.r > bg_col.b, "Default Electric Jellyfish background must be red-themed");
+
+        // 3. Default borders include PulsingFieryBorder
+        let base_instances = harness.app.build_sdf_instances();
+        let has_pulsing_fiery = base_instances.iter().any(|inst| {
+            let (_, border_eff) = iguanodon_shaders::unpack_material_and_border(inst.params[3]);
+            border_eff == BorderShaderEffect::PulsingFieryBorder
+        });
+        assert!(has_pulsing_fiery, "Default borders should use gentle pulsing/rotating fiery colours");
+
+        // 4. Pressing a button jiggles slightly and smokes a little when pressed, then settles for power efficiency
+        harness.click_node(PRIMARY_BTN);
+        assert_eq!(harness.app.last_pressed_button, Some(PRIMARY_BTN));
+        assert!(harness.app.button_jello_spring.value > 0.9);
+        assert!(harness.app.button_smoke_spring.value > 0.9);
+        let smoking_instances = harness.app.build_sdf_instances();
+        let has_gentle_smoke_btn = smoking_instances.iter().any(|inst| {
+            let (mat, border_eff) = iguanodon_shaders::unpack_material_and_border(inst.params[3]);
+            mat == ShaderMaterialId::GentleSmoke as u32
+                && border_eff == BorderShaderEffect::GentleSmokeBorder
+        });
+        assert!(has_gentle_smoke_btn, "Pressed button should emit gentle smoke");
+
+        // 5. Scrolling within a list automatically triggers a bounce overshoot
+        harness.scroll_node(LAZY_COLUMN, 60.0);
+        assert!(harness.app.lazy_overscroll_spring.value.abs() > 2.0);
     }
 }

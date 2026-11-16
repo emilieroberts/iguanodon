@@ -36,7 +36,7 @@ fun StandardBenchmarkApp() {
     val session = LocalIguanodonSession.current
     val isPortrait = session?.isPortrait == true
 
-    var activeTheme by remember { mutableStateOf(IguanodonThemeId.Material3Expressive) }
+    var activeTheme by remember { mutableStateOf(IguanodonThemeId.IguanodonDefault) }
     var activeMode by remember { mutableStateOf(IguanodonThemeMode.Dark) }
     var activePowerMode by remember { mutableStateOf(IguanodonPowerMode.Performance) }
     var activeFrameRateLimit by remember { mutableStateOf(IguanodonFrameRateLimit.Fps120) }

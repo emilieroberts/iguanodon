@@ -405,8 +405,8 @@ impl CachedFontSet {
         let mut title_22 = Vec::with_capacity(128);
         for code in 0..128_u16 {
             if (32..=126).contains(&code) {
-                body_18.push(font.rasterize_ascii(code, 21.0));
-                title_22.push(font.rasterize_ascii(code, 26.0));
+                body_18.push(font.rasterize_ascii(code, 22.5));
+                title_22.push(font.rasterize_ascii(code, 28.0));
             } else {
                 body_18.push(None);
                 title_22.push(None);
