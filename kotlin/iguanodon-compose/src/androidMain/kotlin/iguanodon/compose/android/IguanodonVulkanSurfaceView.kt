@@ -61,18 +61,37 @@ import java.nio.ByteBuffer
  */
 class IguanodonVulkanSurfaceView(
     context: Context,
+    private val ambientFps: Int = 10,
+    private val interactiveFps: Int = 30,
     private val content: @Composable () -> Unit,
 ) : FrameLayout(context), SurfaceHolder.Callback, Choreographer.FrameCallback {
 
-    val session = IguanodonSession(initialWidth = 1280f, initialHeight = 760f)
+    val session = IguanodonSession(initialWidth = 1420f, initialHeight = 920f)
     val compositionHost = IguanodonCompositionHost(session = session, parentContext = Dispatchers.Unconfined)
     private val backingSurfaceView = SurfaceView(context)
-    private var rgbaBytes = ByteArray(1280 * 760 * 4)
-    private var frameBitmap: Bitmap = Bitmap.createBitmap(1280, 760, Bitmap.Config.ARGB_8888)
+    private var rgbaBytes = ByteArray(1420 * 920 * 4)
+    private var frameBitmap: Bitmap = Bitmap.createBitmap(1420, 920, Bitmap.Config.ARGB_8888)
     private var running = false
+    private var windowVisible = true
+    private var isTouchDown = false
+    private val monotonicOrigin = kotlin.time.TimeSource.Monotonic.markNow()
     private var lastFrameNanos = 0L
+    private var interactiveUntilNanos = 0L
+    private var needsImmediateFrame = true
+    private var appliedSurfaceW = 0
+    private var appliedSurfaceH = 0
     private var longPressTriggeredOnCurrentTouch = false
     private var rawInsetsPx = IntArray(4) // [left, top, right, bottom] in physical screen pixels
+
+    private val ambientIntervalNanos: Long = 1_000_000_000L / ambientFps.coerceIn(1, 60).toLong()
+    private val interactiveIntervalNanos: Long = 1_000_000_000L / interactiveFps.coerceIn(10, 60).toLong()
+
+    private fun monoNanos(): Long = monotonicOrigin.elapsedNow().inWholeNanoseconds
+
+    private fun boostInteractive(durationMs: Long = 300L) {
+        interactiveUntilNanos = monoNanos() + durationMs * 1_000_000L
+        needsImmediateFrame = true
+    }
 
     private fun mapTouchX(rawX: Float): Float =
         rawX * session.viewportWidth.toFloat() / width.coerceAtLeast(1).toFloat()
@@ -133,6 +152,7 @@ class IguanodonVulkanSurfaceView(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
             override fun onLongPress(e: MotionEvent) {
+                boostInteractive(300L)
                 longPressTriggeredOnCurrentTouch = true
                 session.onPointerDown(mapTouchX(e.x), mapTouchY(e.y), isRightClickOrLongPress = true)
             }
@@ -143,6 +163,7 @@ class IguanodonVulkanSurfaceView(
                 distanceX: Float,
                 distanceY: Float,
             ): Boolean {
+                boostInteractive(250L)
                 val scaleY = session.viewportHeight.toFloat() / height.coerceAtLeast(1).toFloat()
                 session.onScroll(mapTouchX(e2.x), mapTouchY(e2.y), distanceY * scaleY * 0.45f)
                 return true
@@ -151,6 +172,9 @@ class IguanodonVulkanSurfaceView(
     )
 
     init {
+        // Default Android to battery-friendly PowerSaving mode (lightweight backdrop + adaptive 10/30 FPS)
+        session.setPowerMode(IguanodonPowerMode.PowerSaving)
+
         backingSurfaceView.holder.addCallback(this)
         addView(
             backingSurfaceView,
@@ -203,22 +227,43 @@ class IguanodonVulkanSurfaceView(
         syncSystemBarIconPolarity(darkTheme = (session.currentThemeMode == IguanodonThemeMode.Dark))
     }
 
-    private fun updateViewportAndBuffers(rawWidthPx: Int, rawHeightPx: Int) {
-        if (rawWidthPx <= 0 || rawHeightPx <= 0) return
-        val aspect = rawWidthPx.toFloat() / rawHeightPx.toFloat()
-        val logicalW: Int
-        val logicalH: Int
-        if (rawWidthPx < rawHeightPx) {
-            // Portrait orientation: single-column stack with 1:1 matching framebuffer & layout viewport
-            logicalW = 640
-            logicalH = (logicalW.toFloat() / aspect).toInt().coerceIn(1200, 1560)
-        } else {
-            // Landscape orientation: 3-column dashboard with 1:1 matching framebuffer & layout viewport
-            logicalH = 760
-            logicalW = (logicalH.toFloat() * aspect).toInt().coerceIn(1024, 1680)
+    private fun computeLogicalViewport(rawWidthPx: Int, rawHeightPx: Int): Pair<Int, Int> {
+        val safeW = rawWidthPx.coerceAtLeast(320).toDouble()
+        val safeH = rawHeightPx.coerceAtLeast(240).toDouble()
+        val density = resources.displayMetrics.density.coerceIn(1.0f, 4.0f).toDouble()
+        val swDp = resources.configuration.smallestScreenWidthDp
+        // Use real Android dp density (with a subtle 0.92x UI density factor so 16.5px glyphs read at a crisp ~15sp)
+        // while strictly preserving 1:1 physical pixel aspect ratio across phones, foldables, tablets, & Chromebooks!
+        val uiDivisor = if (swDp >= 600) (density * 0.94).coerceAtLeast(1.0) else (density * 0.88).coerceAtLeast(1.0)
+        var scale = 1.0 / uiDivisor
+        if (swDp < 600 && safeW < safeH && safeW * scale < 460.0) {
+            scale = 460.0 / safeW
         }
-        session.resize(logicalW, logicalH)
+        val maxPixels = 1_850_000.0
+        val projected = (safeW * scale) * (safeH * scale)
+        if (projected > maxPixels) {
+            scale *= kotlin.math.sqrt(maxPixels / projected)
+        }
+        val w = (kotlin.math.round(safeW * scale).toInt() and -2).coerceIn(360, 2400)
+        val h = (kotlin.math.round(safeH * scale).toInt() and -2).coerceIn(280, 2400)
+        return w to h
+    }
+
+    private fun updateViewportAndBuffers(rawWidthPx: Int, rawHeightPx: Int): Boolean {
+        if (rawWidthPx <= 0 || rawHeightPx <= 0) return false
+        val (logicalW, logicalH) = computeLogicalViewport(rawWidthPx, rawHeightPx)
+        val changed = session.viewportWidth != logicalW || session.viewportHeight != logicalH
+        if (changed) {
+            session.resize(logicalW, logicalH)
+            boostInteractive(300L)
+        }
+        if (appliedSurfaceW != logicalW || appliedSurfaceH != logicalH) {
+            appliedSurfaceW = logicalW
+            appliedSurfaceH = logicalH
+            backingSurfaceView.holder.setFixedSize(logicalW, logicalH)
+        }
         applyScaledSafeInsets()
+        return changed
     }
 
     private fun ensureBuffersMatchViewport() {
@@ -238,11 +283,23 @@ class IguanodonVulkanSurfaceView(
         updateViewportAndBuffers(w, h)
     }
 
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        windowVisible = (visibility == View.VISIBLE)
+        if (windowVisible && running) {
+            boostInteractive(250L)
+            Choreographer.getInstance().removeFrameCallback(this)
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
     override fun surfaceCreated(holder: SurfaceHolder) {
         running = true
-        lastFrameNanos = System.nanoTime()
-        if (width > 0 && height > 0) {
-            updateViewportAndBuffers(width, height)
+        lastFrameNanos = monoNanos()
+        val viewW = this.width.takeIf { it > 0 } ?: holder.surfaceFrame.width()
+        val viewH = this.height.takeIf { it > 0 } ?: holder.surfaceFrame.height()
+        if (viewW > 0 && viewH > 0) {
+            updateViewportAndBuffers(viewW, viewH)
         }
         session.attachAndroidSurface(
             holder.surface,
@@ -251,16 +308,22 @@ class IguanodonVulkanSurfaceView(
         )
         requestApplyInsets()
         syncSystemBarIconPolarity(darkTheme = (session.currentThemeMode == IguanodonThemeMode.Dark))
+        boostInteractive(350L)
+        Choreographer.getInstance().removeFrameCallback(this)
         Choreographer.getInstance().postFrameCallback(this)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        updateViewportAndBuffers(width, height)
+        // Always derive logical viewport from the parent View's physical screen pixels, not the scaled Surface buffer!
+        val viewW = this.width.takeIf { it > 0 } ?: width
+        val viewH = this.height.takeIf { it > 0 } ?: height
+        updateViewportAndBuffers(viewW, viewH)
         session.attachAndroidSurface(
             holder.surface,
             session.viewportWidth,
             session.viewportHeight,
         )
+        boostInteractive(250L)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -270,15 +333,22 @@ class IguanodonVulkanSurfaceView(
     }
 
     override fun doFrame(frameTimeNanos: Long) {
-        if (!running) return
+        if (!running || !windowVisible) return
+        val nowMono = monoNanos()
         val elapsedNanos = frameTimeNanos - lastFrameNanos
-        val minIntervalNanos = session.targetFrameIntervalNanos
+        val adaptiveInterval = if (isTouchDown || nowMono < interactiveUntilNanos) {
+            interactiveIntervalNanos
+        } else {
+            ambientIntervalNanos
+        }
+        val minIntervalNanos = maxOf(adaptiveInterval, session.targetFrameIntervalNanos)
         // Subtract a 1.5ms vsync jitter tolerance so 60Hz/90Hz/120Hz Choreographer ticks don't skip an extra cycle
-        if (minIntervalNanos > 0L && elapsedNanos in 1L until (minIntervalNanos - 1_500_000L)) {
+        if (!needsImmediateFrame && minIntervalNanos > 0L && elapsedNanos in 1L until (minIntervalNanos - 1_500_000L)) {
             Choreographer.getInstance().postFrameCallback(this)
             return
         }
-        val dt = (elapsedNanos / 1_000_000_000.0f).coerceIn(1f / 1000f, 0.15f)
+        needsImmediateFrame = false
+        val dt = if (lastFrameNanos == 0L) 0.016f else (elapsedNanos / 1_000_000_000.0f).coerceIn(1f / 1000f, 0.15f)
         lastFrameNanos = frameTimeNanos
 
         if (width > 0 && height > 0) {
@@ -315,6 +385,8 @@ class IguanodonVulkanSurfaceView(
         val y = mapTouchY(event.y)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                isTouchDown = true
+                boostInteractive(350L)
                 requestFocus()
                 longPressTriggeredOnCurrentTouch = false
                 session.onPointerMove(x, y)
@@ -322,10 +394,13 @@ class IguanodonVulkanSurfaceView(
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                boostInteractive(200L)
                 session.onPointerMove(x, y)
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                isTouchDown = false
+                boostInteractive(300L)
                 if (!longPressTriggeredOnCurrentTouch) {
                     session.onPointerUp(x, y)
                 }
@@ -338,11 +413,13 @@ class IguanodonVulkanSurfaceView(
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_DEL) {
+            boostInteractive(250L)
             session.onBackspace()
             return true
         }
         val unicode = event.unicodeChar
         if (unicode in 32..126) {
+            boostInteractive(250L)
             session.onKeyChar(unicode.toChar())
             return true
         }

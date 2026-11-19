@@ -532,10 +532,13 @@ open class IguanodonModifier(
     val shaderP3: Float = 0f,
     val scrollState: ScrollState? = null,
     val scrollAxis: Byte = 0,
+    val scrollOffsetPx: Int = 0,
     val onClick: (() -> Unit)? = null,
     val onLongClick: (() -> Unit)? = null,
     val onHoverChanged: ((Boolean) -> Unit)? = null,
     val onDragDelta: ((Float, Float) -> Unit)? = null,
+    val onNormalizedDrag: ((Boolean, Float, Float) -> Unit)? = null,
+    val onScrollDelta: ((Float, Float) -> Unit)? = null,
 ) {
     fun copyWith(
         padLeftDp: Float = this.padLeftDp,
@@ -564,10 +567,13 @@ open class IguanodonModifier(
         shaderP3: Float = this.shaderP3,
         scrollState: ScrollState? = this.scrollState,
         scrollAxis: Byte = this.scrollAxis,
+        scrollOffsetPx: Int = this.scrollOffsetPx,
         onClick: (() -> Unit)? = this.onClick,
         onLongClick: (() -> Unit)? = this.onLongClick,
         onHoverChanged: ((Boolean) -> Unit)? = this.onHoverChanged,
         onDragDelta: ((Float, Float) -> Unit)? = this.onDragDelta,
+        onNormalizedDrag: ((Boolean, Float, Float) -> Unit)? = this.onNormalizedDrag,
+        onScrollDelta: ((Float, Float) -> Unit)? = this.onScrollDelta,
     ): IguanodonModifier = IguanodonModifier(
         padLeftDp = padLeftDp,
         padTopDp = padTopDp,
@@ -595,10 +601,13 @@ open class IguanodonModifier(
         shaderP3 = shaderP3,
         scrollState = scrollState,
         scrollAxis = scrollAxis,
+        scrollOffsetPx = scrollOffsetPx,
         onClick = onClick,
         onLongClick = onLongClick,
         onHoverChanged = onHoverChanged,
         onDragDelta = onDragDelta,
+        onNormalizedDrag = onNormalizedDrag,
+        onScrollDelta = onScrollDelta,
     )
 
     infix fun then(other: IguanodonModifier): IguanodonModifier {
@@ -631,10 +640,13 @@ open class IguanodonModifier(
             shaderP3 = if (other.shaderId != 0.toByte()) other.shaderP3 else this.shaderP3,
             scrollState = other.scrollState ?: this.scrollState,
             scrollAxis = if (other.scrollState != null) other.scrollAxis else this.scrollAxis,
+            scrollOffsetPx = if (other.scrollState != null) other.scrollOffsetPx else this.scrollOffsetPx,
             onClick = other.onClick ?: this.onClick,
             onLongClick = other.onLongClick ?: this.onLongClick,
             onHoverChanged = other.onHoverChanged ?: this.onHoverChanged,
             onDragDelta = other.onDragDelta ?: this.onDragDelta,
+            onNormalizedDrag = other.onNormalizedDrag ?: this.onNormalizedDrag,
+            onScrollDelta = other.onScrollDelta ?: this.onScrollDelta,
         )
     }
 
@@ -761,10 +773,10 @@ fun Modifier.hoverable(
 }
 
 fun Modifier.verticalScroll(state: ScrollState, enabled: Boolean = true): Modifier =
-    if (enabled) copyWith(scrollState = state, scrollAxis = 0) else this
+    if (enabled) copyWith(scrollState = state, scrollAxis = 1, scrollOffsetPx = state.value) else this
 
 fun Modifier.horizontalScroll(state: ScrollState, enabled: Boolean = true): Modifier =
-    if (enabled) copyWith(scrollState = state, scrollAxis = 1) else this
+    if (enabled) copyWith(scrollState = state, scrollAxis = 2, scrollOffsetPx = state.value) else this
 
 fun Modifier.pointerInput(
     key1: Any?,
@@ -1688,9 +1700,10 @@ fun TextField(
         update = {
             set(value) { v ->
                 this.textValue = v
+                val txtCol = if (v.isEmpty()) 0xFF8C8698.toInt() else 0xFFF8F6FA.toInt()
                 session?.encoder?.encodeSetText(
                     nodeId = this.nodeId,
-                    colorRgba = 0xFFE6E0E9.toInt(),
+                    colorRgba = txtCol,
                     fontSizeSp = 14f,
                     fontWeight = FontWeight.Normal.weight,
                     maxLines = 1,
@@ -1700,7 +1713,7 @@ fun TextField(
             set(onValueChange) { cb ->
                 this.onTextChange = cb
             }
-            set(modifier.fillMaxWidth().heightIn(min = MIN_TOUCH_TARGET_DP.dp)) { mod ->
+            set(if (modifier.heightDp > 0f) modifier.fillMaxWidth() else modifier.fillMaxWidth().heightIn(min = MIN_TOUCH_TARGET_DP.dp)) { mod ->
                 session?.syncModifierToNode(this, mod)
             }
         },

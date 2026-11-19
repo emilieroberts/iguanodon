@@ -16,6 +16,9 @@
 
 package iguanodon.compose.bridge
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import iguanodon.compose.ByteBufferCommandEncoder
 import iguanodon.compose.IguanodonEventMask
 import iguanodon.compose.IguanodonFrameRateLimit
@@ -77,17 +80,17 @@ class IguanodonSession(
     private val eventPollBuffer = ByteArray(ReverseEventTypes.RECORD_BYTE_SIZE * 64)
     private var nextDynamicNodeId: Long = 1000L
 
-    var viewportWidth: Int = initialWidth.toInt()
+    var viewportWidth: Int by mutableStateOf(initialWidth.toInt())
         private set
-    var viewportHeight: Int = initialHeight.toInt()
+    var viewportHeight: Int by mutableStateOf(initialHeight.toInt())
         private set
-    var safeInsetLeftDp: Float = 0f
+    var safeInsetLeftDp: Float by mutableStateOf(0f)
         private set
-    var safeInsetTopDp: Float = 0f
+    var safeInsetTopDp: Float by mutableStateOf(0f)
         private set
-    var safeInsetRightDp: Float = 0f
+    var safeInsetRightDp: Float by mutableStateOf(0f)
         private set
-    var safeInsetBottomDp: Float = 0f
+    var safeInsetBottomDp: Float by mutableStateOf(0f)
         private set
     var latestFrameMs: Float = 0f
         private set
@@ -145,6 +148,8 @@ class IguanodonSession(
         node.onLongClick = modifier.onLongClick ?: node.onLongClick
         node.onHoverChanged = modifier.onHoverChanged ?: node.onHoverChanged
         node.onDragDelta = modifier.onDragDelta ?: node.onDragDelta
+        node.onNormalizedDrag = modifier.onNormalizedDrag ?: node.onNormalizedDrag
+        node.onScrollDelta = modifier.onScrollDelta ?: node.onScrollDelta
 
         encoder.encodeSetLayoutStyle(
             nodeId = node.nodeId,
@@ -189,7 +194,7 @@ class IguanodonSession(
             encoder.encodeSetScrollState(
                 nodeId = node.nodeId,
                 axis = modifier.scrollAxis,
-                offsetPx = modifier.scrollState.value.toFloat(),
+                offsetPx = modifier.scrollOffsetPx.toFloat(),
             )
         }
 
@@ -197,7 +202,7 @@ class IguanodonSession(
         if (node.onClick != null) mask = mask or IguanodonEventMask.CLICK
         if (node.onLongClick != null) mask = mask or IguanodonEventMask.LONG_CLICK
         if (node.onHoverChanged != null) mask = mask or IguanodonEventMask.HOVER
-        if (node.onDragDelta != null) mask = mask or IguanodonEventMask.DRAG
+        if (node.onDragDelta != null || node.onNormalizedDrag != null) mask = mask or IguanodonEventMask.DRAG
         if (node.onTextChange != null) mask = mask or IguanodonEventMask.TEXT_INPUT or IguanodonEventMask.KEY
         if (modifier.scrollState != null || node.onScrollDelta != null) mask = mask or IguanodonEventMask.SCROLL
         if (mask != 0) {
@@ -292,6 +297,7 @@ class IguanodonSession(
             offset + ReverseEventTypes.RECORD_BYTE_SIZE <= eventPollBuffer.size
         ) {
             val evType = eventPollBuffer[offset].toInt() and 0xFF
+            val flags = eventPollBuffer[offset + 1].toInt() and 0xFF
             val auxU32 = readIntLe(eventPollBuffer, offset + 4)
             val nodeId = readLongLe(eventPollBuffer, offset + 8)
             val f0 = Float.fromBits(readIntLe(eventPollBuffer, offset + 16))
@@ -307,11 +313,21 @@ class IguanodonSession(
                 }
                 ReverseEventTypes.HOVER_ENTER -> nodeRegistry[nodeId]?.onHoverChanged?.invoke(true)
                 ReverseEventTypes.HOVER_EXIT -> nodeRegistry[nodeId]?.onHoverChanged?.invoke(false)
-                ReverseEventTypes.DRAG_DELTA -> nodeRegistry[nodeId]?.onDragDelta?.invoke(f0, f1)
+                ReverseEventTypes.DRAG_DELTA -> {
+                    val node = nodeRegistry[nodeId]
+                    if (flags == 0) {
+                        node?.onDragDelta?.invoke(f0, f1)
+                    }
+                    node?.onNormalizedDrag?.invoke(flags != 0, f2, f3)
+                }
                 ReverseEventTypes.SCROLL_DELTA -> {
                     val node = nodeRegistry[nodeId]
                     node?.onScrollDelta?.invoke(f0, f1)
-                    node?.modifierChain?.scrollState?.dispatchRawDelta(f1)
+                    val st = node?.modifierChain?.scrollState
+                    if (st != null) {
+                        st.maxValue = kotlin.math.ceil(f0).toInt().coerceAtLeast(0)
+                        st.dispatchRawDelta(f1)
+                    }
                 }
                 ReverseEventTypes.KEY_CHAR -> {
                     val node = nodeRegistry[nodeId]

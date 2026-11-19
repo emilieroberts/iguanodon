@@ -791,6 +791,7 @@ pub fn apply_commands_to_harness(
                 let node = harness.applier_scene.ensure_node(node_id, 0);
                 node.scroll_axis = axis;
                 node.scroll_offset_px = offset_px;
+                applier_tree_dirty = true;
             }
             DecodedCommand::SetEventMask { node_id, mask } => {
                 harness.applier_scene.ensure_node(node_id, 0).event_mask = mask;
@@ -1478,6 +1479,17 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
                 ) -> *mut std::ffi::c_void = std::mem::transmute(from_surface_sym);
                 let anw = from_surface(env, jsurface);
                 if !anw.is_null() {
+                    let set_geom_sym =
+                        dlsym(lib, b"ANativeWindow_setBuffersGeometry\0".as_ptr() as *const i8);
+                    if !set_geom_sym.is_null() {
+                        let set_geom: unsafe extern "C" fn(
+                            *mut std::ffi::c_void,
+                            i32,
+                            i32,
+                            i32,
+                        ) -> i32 = std::mem::transmute(set_geom_sym);
+                        let _ = set_geom(anw, width, height, 0);
+                    }
                     ACTIVE_ANW.store(anw, Ordering::SeqCst);
                     let ok = iguanodon_attach_android_surface(
                         harness,

@@ -405,8 +405,8 @@ impl CachedFontSet {
         let mut title_22 = Vec::with_capacity(128);
         for code in 0..128_u16 {
             if (32..=126).contains(&code) {
-                body_18.push(font.rasterize_ascii(code, 22.5));
-                title_22.push(font.rasterize_ascii(code, 28.0));
+                body_18.push(font.rasterize_ascii(code, 16.5));
+                title_22.push(font.rasterize_ascii(code, 20.5));
             } else {
                 body_18.push(None);
                 title_22.push(None);
@@ -762,6 +762,26 @@ impl<'a> TtfParser<'a> {
     }
 }
 
+/// Measures the rendered horizontal advance width (in pixels) of `text` using the cached 18px or 22px glyph metrics.
+pub fn measure_text_sized_px(text: &str, is_headline: bool) -> f32 {
+    let font = CachedFontSet::global();
+    let table = if is_headline {
+        &font.title_22px
+    } else {
+        &font.body_18px
+    };
+    let mut adv_sum = 0_i32;
+    for ch in text.chars() {
+        let code = (ch as usize).min(127);
+        if let Some(Some(glyph)) = table.get(code) {
+            adv_sum += glyph.advance_px;
+        } else {
+            adv_sum += 10;
+        }
+    }
+    adv_sum as f32
+}
+
 /// Renders anti-aliased Roboto / NotoSans text at 18px (body/buttons) or 22px (headlines when `is_headline` is true).
 pub fn draw_text_sized_rgba(
     fb_rgba: &mut [u8],
@@ -794,7 +814,7 @@ pub fn draw_text_sized_rgba(
     for ch in text.chars() {
         let code = (ch as usize).min(127);
         if let Some(Some(glyph)) = table.get(code) {
-            if pen_x + glyph.advance_px > clip_x1 - 2 {
+            if pen_x + glyph.advance_px > clip_x1 {
                 break;
             }
             let gx0 = pen_x + glyph.bearing_x;

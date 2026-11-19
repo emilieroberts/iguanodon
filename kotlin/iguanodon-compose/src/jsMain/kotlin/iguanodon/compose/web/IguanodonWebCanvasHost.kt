@@ -34,11 +34,16 @@ import org.w3c.dom.events.WheelEvent
 /**
  * Pure `compose.runtime` HTML5 `<canvas>` + WebAssembly (`iguanodon_ffi.wasm`) host for Iguanodon.
  *
- * Drives `Recomposer` + `BroadcastFrameClock` + `IguanodonApplier` directly in the browser via
- * `window.requestAnimationFrame` and blits `iguanodon_framebuffer_ptr` into `<canvas>` with zero copy.
+ * Tuned for ultra-low CPU usage in browsers:
+ * - Caps ambient background shader animations to [ambientFps] (`10 FPS` by default).
+ * - Pauses rendering completely (`0% CPU`) whenever the browser tab is hidden (`document.hidden`).
+ * - Passive cursor hover does not boost FPS above [ambientFps]; only active drags, clicks, wheel
+ *   scrolls, typing, or Compose state updates briefly step up to [interactiveFps] (`25 FPS`).
  */
 class IguanodonWebCanvasHost(
     canvasElementId: String = "iguanodon-canvas",
+    private val ambientFps: Int = 10,
+    private val interactiveFps: Int = 25,
     private val content: @Composable () -> Unit,
 ) {
     val canvas: HTMLCanvasElement = (document.getElementById(canvasElementId) as? HTMLCanvasElement)
@@ -48,8 +53,14 @@ class IguanodonWebCanvasHost(
     val session: IguanodonSession
     val compositionHost: IguanodonCompositionHost
 
+    private val ambientIntervalMs: Double = 1000.0 / ambientFps.coerceIn(1, 60).toDouble()
+    private val interactiveIntervalMs: Double = 1000.0 / interactiveFps.coerceIn(10, 60).toDouble()
+
     private var lastFrameMs: Double = 0.0
-    private var lastActivityMs: Double = window.performance.now()
+    private var interactiveUntilMs: Double = window.performance.now() + 300.0
+    private var isPointerDown: Boolean = false
+    private var lastTouchY: Float = 0f
+    private var needsImmediateFrame: Boolean = true
     private var disposed: Boolean = false
 
     init {
@@ -66,18 +77,20 @@ class IguanodonWebCanvasHost(
     }
 
     private fun computeLogicalViewport(winW: Int, winH: Int): Pair<Int, Int> {
-        val safeW = winW.coerceAtLeast(320)
-        val safeH = winH.coerceAtLeast(320)
-        val aspect = safeW.toFloat() / safeH.toFloat()
-        return if (safeW < safeH) {
-            val w = 640
-            val h = (w / aspect).toInt().coerceIn(1080, 1560)
-            w to h
-        } else {
-            val h = 880
-            val w = (h * aspect).toInt().coerceIn(1120, 1680)
-            w to h
+        val safeW = winW.coerceAtLeast(320).toDouble()
+        val safeH = winH.coerceAtLeast(240).toDouble()
+        // Keep 1:1 CSS pixel aspect & font sizing across all window sizes so resizing the browser window
+        // dynamically reflows and scrolls content instead of shrinking/inflating typography!
+        // Only cap total pixels uniformly on >2.2M-pixel 4K monitors for low CPU usage.
+        var scale = 1.0
+        val maxPixels = 2_200_000.0
+        val projectedPixels = safeW * safeH
+        if (projectedPixels > maxPixels) {
+            scale = kotlin.math.sqrt(maxPixels / projectedPixels)
         }
+        val w = kotlin.math.round(safeW * scale).toInt().coerceIn(320, 2560)
+        val h = kotlin.math.round(safeH * scale).toInt().coerceIn(240, 1600)
+        return w to h
     }
 
     private fun mapClientCoords(clientX: Double, clientY: Double): Pair<Float, Float> {
@@ -89,43 +102,52 @@ class IguanodonWebCanvasHost(
         return x to y
     }
 
-    private fun markActive() {
-        lastActivityMs = window.performance.now()
+    private fun boostInteractive(durationMs: Double = 250.0) {
+        interactiveUntilMs = window.performance.now() + durationMs
+        needsImmediateFrame = true
     }
 
     private fun installDomListeners() {
         window.addEventListener("resize", {
-            markActive()
             val (nw, nh) = computeLogicalViewport(window.innerWidth, window.innerHeight)
             if (nw != session.viewportWidth || nh != session.viewportHeight) {
                 canvas.width = nw
                 canvas.height = nh
                 session.resize(nw, nh)
+                boostInteractive(300.0)
             }
         })
 
         canvas.addEventListener("mousemove", { ev ->
             val e = ev as MouseEvent
-            markActive()
             val (x, y) = mapClientCoords(e.clientX.toDouble(), e.clientY.toDouble())
             session.onPointerMove(x, y)
+            // Only step up to interactive FPS when actively dragging (e.g., ROI box or scrubber);
+            // passive hover updates ride the lightweight 10 FPS ambient tick.
+            if (isPointerDown) {
+                boostInteractive(150.0)
+            }
         })
 
         canvas.addEventListener("mousedown", { ev ->
             val e = ev as MouseEvent
-            markActive()
+            isPointerDown = true
             val (x, y) = mapClientCoords(e.clientX.toDouble(), e.clientY.toDouble())
             val isRight = e.button.toInt() == 2
             session.onPointerMove(x, y)
             session.onPointerDown(x, y, isRight)
+            boostInteractive(300.0)
         })
 
-        canvas.addEventListener("mouseup", { ev ->
+        window.addEventListener("mouseup", { ev ->
             val e = ev as MouseEvent
-            markActive()
-            if (e.button.toInt() == 0) {
-                val (x, y) = mapClientCoords(e.clientX.toDouble(), e.clientY.toDouble())
-                session.onPointerUp(x, y)
+            if (isPointerDown) {
+                isPointerDown = false
+                if (e.button.toInt() == 0) {
+                    val (x, y) = mapClientCoords(e.clientX.toDouble(), e.clientY.toDouble())
+                    session.onPointerUp(x, y)
+                }
+                boostInteractive(250.0)
             }
         })
 
@@ -138,25 +160,26 @@ class IguanodonWebCanvasHost(
             { ev ->
                 val e = ev as WheelEvent
                 ev.preventDefault()
-                markActive()
                 val (x, y) = mapClientCoords(e.clientX.toDouble(), e.clientY.toDouble())
                 session.onScroll(x, y, e.deltaY.toFloat() * 0.65f)
+                boostInteractive(200.0)
             },
             js("{ passive: false }"),
         )
 
-        // Touch support for iPad / mobile browsers
         canvas.addEventListener(
             "touchstart",
             { ev ->
                 ev.preventDefault()
-                markActive()
+                isPointerDown = true
                 val touches = ev.asDynamic().touches
                 if ((touches.length as Int) > 0) {
                     val t = touches[0]
                     val (x, y) = mapClientCoords((t.clientX as Number).toDouble(), (t.clientY as Number).toDouble())
+                    lastTouchY = y
                     session.onPointerMove(x, y)
                     session.onPointerDown(x, y, false)
+                    boostInteractive(300.0)
                 }
             },
             js("{ passive: false }"),
@@ -166,12 +189,17 @@ class IguanodonWebCanvasHost(
             "touchmove",
             { ev ->
                 ev.preventDefault()
-                markActive()
                 val touches = ev.asDynamic().touches
                 if ((touches.length as Int) > 0) {
                     val t = touches[0]
                     val (x, y) = mapClientCoords((t.clientX as Number).toDouble(), (t.clientY as Number).toDouble())
+                    val dy = lastTouchY - y
+                    lastTouchY = y
                     session.onPointerMove(x, y)
+                    if (kotlin.math.abs(dy) > 0.5f) {
+                        session.onScroll(x, y, dy)
+                    }
+                    boostInteractive(150.0)
                 }
             },
             js("{ passive: false }"),
@@ -181,12 +209,13 @@ class IguanodonWebCanvasHost(
             "touchend",
             { ev ->
                 ev.preventDefault()
-                markActive()
+                isPointerDown = false
                 val touches = ev.asDynamic().changedTouches
                 if ((touches.length as Int) > 0) {
                     val t = touches[0]
                     val (x, y) = mapClientCoords((t.clientX as Number).toDouble(), (t.clientY as Number).toDouble())
                     session.onPointerUp(x, y)
+                    boostInteractive(250.0)
                 }
             },
             js("{ passive: false }"),
@@ -194,17 +223,39 @@ class IguanodonWebCanvasHost(
 
         window.addEventListener("keydown", { ev ->
             val e = ev as KeyboardEvent
-            // Ignore shortcuts like Ctrl+R / Cmd+R
             if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-                if (e.key == "Backspace") {
-                    e.preventDefault()
-                    markActive()
-                    session.onBackspace()
-                } else if (e.key.length == 1) {
-                    val code = e.key[0].code
-                    if (code in 32..126) {
-                        markActive()
-                        session.onKeyChar(e.key[0])
+                when (e.key) {
+                    "Backspace" -> {
+                        e.preventDefault()
+                        session.onBackspace()
+                        boostInteractive(250.0)
+                    }
+                    "PageDown" -> {
+                        e.preventDefault()
+                        session.onScroll(session.viewportWidth * 0.5f, session.viewportHeight * 0.5f, 260f)
+                        boostInteractive(250.0)
+                    }
+                    "PageUp" -> {
+                        e.preventDefault()
+                        session.onScroll(session.viewportWidth * 0.5f, session.viewportHeight * 0.5f, -260f)
+                        boostInteractive(250.0)
+                    }
+                    "ArrowDown" -> {
+                        e.preventDefault()
+                        session.onScroll(session.viewportWidth * 0.5f, session.viewportHeight * 0.5f, 56f)
+                        boostInteractive(200.0)
+                    }
+                    "ArrowUp" -> {
+                        e.preventDefault()
+                        session.onScroll(session.viewportWidth * 0.5f, session.viewportHeight * 0.5f, -56f)
+                        boostInteractive(200.0)
+                    }
+                    else -> if (e.key.length == 1) {
+                        val code = e.key[0].code
+                        if (code in 32..126) {
+                            session.onKeyChar(e.key[0])
+                            boostInteractive(250.0)
+                        }
                     }
                 }
             }
@@ -222,17 +273,28 @@ class IguanodonWebCanvasHost(
     }
 
     private fun onAnimationFrame(nowMs: Double) {
-        val elapsedSinceLast = if (lastFrameMs == 0.0) 16.6 else (nowMs - lastFrameMs)
-        val idleMs = nowMs - lastActivityMs
-        // Run at full refresh rate during interaction or Compose updates; coast smoothly at ~15fps when idle
-        if (idleMs > 3000.0 && elapsedSinceLast < 64.0 && session.encoder.isEmpty()) {
+        // 0% CPU when browser tab is in the background or window is minimized
+        if (document.asDynamic().hidden == true) {
             return
         }
-        val dtSec = (elapsedSinceLast / 1000.0).toFloat().coerceIn(0.001f, 0.1f)
-        lastFrameMs = nowMs
+
+        val elapsedMs = if (lastFrameMs == 0.0) 999.0 else (nowMs - lastFrameMs)
+        val minInterval = if (isPointerDown || nowMs < interactiveUntilMs) {
+            interactiveIntervalMs
+        } else {
+            ambientIntervalMs
+        }
+
+        if (!needsImmediateFrame && elapsedMs < minInterval) {
+            return
+        }
+        needsImmediateFrame = false
 
         val nanos = (nowMs * 1_000_000.0).toLong()
         compositionHost.doFrame(nanos)
+
+        val dtSec = (elapsedMs / 1000.0).toFloat().coerceIn(0.001f, 0.25f)
+        lastFrameMs = nowMs
 
         val w = session.viewportWidth
         val h = session.viewportHeight

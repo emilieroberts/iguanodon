@@ -47,6 +47,15 @@ impl Color {
         Self { r, g, b, a }
     }
 
+    /// Parses a Compose / Android `0xAARRGGBB` packed integer (`Color.toArgb()`).
+    pub const fn from_argb(argb: u32) -> Self {
+        let a = ((argb >> 24) & 0xFF) as f32 / 255.0;
+        let r = ((argb >> 16) & 0xFF) as f32 / 255.0;
+        let g = ((argb >> 8) & 0xFF) as f32 / 255.0;
+        let b = (argb & 0xFF) as f32 / 255.0;
+        Self { r, g, b, a }
+    }
+
     pub fn with_alpha(self, a: f32) -> Self {
         Self { a, ..self }
     }

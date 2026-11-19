@@ -31,7 +31,7 @@ use iguanodon_shaders::{
     pack_material_and_border, BorderShaderEffect, ShaderMaterialId, SdfPrimitiveInstance,
 };
 use iguanodon_text::{
-    draw_text_rgba, draw_text_sized_rgba, CachedFontSet, MultilineTextLayout,
+    draw_text_rgba, draw_text_sized_rgba, measure_text_sized_px, CachedFontSet, MultilineTextLayout,
 };
 use iguanodon_theme::{InteractionShaderKind, ThemeDescriptor, ThemeId, ThemeMode};
 pub use iguanodon_vk::{GpuImageTexture, VulkanRenderer};
@@ -3492,6 +3492,8 @@ pub struct ApplierNode {
     pub image: Option<ApplierImagePayload>,
     pub scroll_axis: u8,
     pub scroll_offset_px: f32,
+    pub content_extent_px: f32,
+    pub eff_scroll_px: f32,
     pub event_mask: u32,
     pub bounds: Rect,
 }
@@ -3510,6 +3512,8 @@ impl ApplierNode {
             image: None,
             scroll_axis: 0,
             scroll_offset_px: 0.0,
+            content_extent_px: 0.0,
+            eff_scroll_px: 0.0,
             event_mask: 0,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
         }
@@ -3560,9 +3564,10 @@ impl ApplierSceneGraph {
         self.press_jello_spring.step(dt);
         self.press_smoke_spring.step(dt);
         self.scroll_overshoot_spring.step(dt);
-        for smoke_age in self.smoking_nodes.values_mut() {
+        self.smoking_nodes.retain(|_, smoke_age| {
             *smoke_age += dt;
-        }
+            *smoke_age < 0.75
+        });
     }
 
     pub fn ensure_node(&mut self, node_id: u64, kind: u8) -> &mut ApplierNode {
@@ -3636,19 +3641,27 @@ impl ApplierSceneGraph {
     }
 
     fn layout_subtree(&mut self, node_id: u64, rect: Rect) {
-        let (children, layout, has_event) = match self.nodes.get_mut(&node_id) {
+        let (children, layout, scroll_axis, req_scroll) = match self.nodes.get_mut(&node_id) {
             Some(node) => {
                 let mut b = rect;
                 if node.event_mask != 0 {
-                    b.width = b.width.max(MIN_TOUCH_TARGET_DP);
-                    b.height = b.height.max(MIN_TOUCH_TARGET_DP);
+                    if node.layout.width <= 0.0 {
+                        b.width = b.width.max(MIN_TOUCH_TARGET_DP);
+                    }
+                    if node.layout.height <= 0.0 {
+                        b.height = b.height.max(MIN_TOUCH_TARGET_DP);
+                    }
                 }
                 node.bounds = b;
-                (node.children.clone(), node.layout, node.event_mask != 0)
+                (
+                    node.children.clone(),
+                    node.layout,
+                    node.scroll_axis,
+                    node.scroll_offset_px,
+                )
             }
             None => return,
         };
-        let _ = has_event;
         if children.is_empty() {
             return;
         }
@@ -3656,38 +3669,47 @@ impl ApplierSceneGraph {
         let inner_y = rect.y + layout.pad_t;
         let inner_w = (rect.width - layout.pad_l - layout.pad_r).max(0.0);
         let inner_h = (rect.height - layout.pad_t - layout.pad_b).max(0.0);
-        let n = children.len() as f32;
         let total_gap = layout.gap * (children.len().saturating_sub(1) as f32);
 
         match layout.flex_dir {
             1 => {
                 // Row (horizontal)
-                let slice_w = ((inner_w - total_gap) / n).max(MIN_TOUCH_TARGET_DP);
-                let mut cx = inner_x;
-                for child_id in children {
-                    let (cw, ch) = self
-                        .nodes
-                        .get(&child_id)
-                        .map(|c| {
-                            let w = if c.layout.width > 0.0 {
-                                c.layout.width
-                            } else {
-                                slice_w
-                            };
-                            let h = if c.layout.height > 0.0 {
-                                c.layout.height
-                            } else {
-                                inner_h.max(MIN_TOUCH_TARGET_DP)
-                            };
-                            (w.max(c.layout.min_w), h)
-                        })
-                        .unwrap_or((slice_w, inner_h));
-                    self.layout_subtree(child_id, Rect::new(cx, inner_y, cw, ch));
-                    cx += cw + layout.gap;
+                let mut fixed_w_sum = 0.0_f32;
+                let mut weight_sum = 0.0_f32;
+                let mut auto_count = 0_usize;
+                for &cid in &children {
+                    if let Some(c) = self.nodes.get(&cid) {
+                        if c.layout.width > 0.0 {
+                            fixed_w_sum += c.layout.width.max(c.layout.min_w).min(c.layout.max_w);
+                        } else if c.layout.weight > 0.0 {
+                            weight_sum += c.layout.weight;
+                        } else {
+                            auto_count += 1;
+                        }
+                    } else {
+                        auto_count += 1;
+                    }
                 }
-            }
-            2 => {
-                // Box (stack)
+                let content_w = fixed_w_sum + total_gap + layout.pad_l + layout.pad_r;
+                let eff_scroll = if scroll_axis == 2 {
+                    let max_scroll = (content_w - rect.width).max(0.0);
+                    let clamped = req_scroll.clamp(0.0, max_scroll);
+                    if let Some(n) = self.nodes.get_mut(&node_id) {
+                        n.content_extent_px = content_w;
+                        n.eff_scroll_px = clamped;
+                    }
+                    clamped
+                } else {
+                    0.0
+                };
+                let rem_w = (inner_w - fixed_w_sum - total_gap).max(0.0);
+                let auto_slice_w = if weight_sum <= 0.0 && auto_count > 0 {
+                    rem_w / (auto_count as f32)
+                } else {
+                    0.0
+                };
+
+                let mut cx = inner_x - eff_scroll;
                 for child_id in children {
                     let (cw, ch) = self
                         .nodes
@@ -3695,43 +3717,168 @@ impl ApplierSceneGraph {
                         .map(|c| {
                             let w = if c.layout.width > 0.0 {
                                 c.layout.width
+                            } else if c.layout.weight > 0.0 && weight_sum > 0.0 {
+                                rem_w * (c.layout.weight / weight_sum)
                             } else {
-                                inner_w
+                                auto_slice_w
                             };
                             let h = if c.layout.height > 0.0 {
                                 c.layout.height
                             } else {
                                 inner_h
                             };
-                            (w.max(c.layout.min_w), h)
+                            (w.max(c.layout.min_w).min(c.layout.max_w), h)
                         })
-                        .unwrap_or((inner_w, inner_h));
-                    self.layout_subtree(child_id, Rect::new(inner_x, inner_y, cw, ch));
+                        .unwrap_or((auto_slice_w, inner_h));
+                    let cy = match layout.align {
+                        1 => inner_y + ((inner_h - ch) * 0.5).max(0.0), // CenterVertically
+                        2 => inner_y + (inner_h - ch).max(0.0),         // Bottom
+                        _ => inner_y,
+                    };
+                    self.layout_subtree(child_id, Rect::new(cx, cy, cw, ch));
+                    cx += cw + layout.gap;
                 }
             }
-            _ => {
-                // Column (vertical default)
-                let slice_h = ((inner_h - total_gap) / n).max(MIN_TOUCH_TARGET_DP);
-                let mut cy = inner_y;
+            2 => {
+                // Box (stack with 9-point Alignment + optional vertical scroll)
+                let mut max_child_h = 0.0_f32;
+                for &cid in &children {
+                    if let Some(c) = self.nodes.get(&cid) {
+                        let ch = if c.layout.height > 0.0 {
+                            c.layout.height
+                        } else {
+                            inner_h
+                        };
+                        if ch > max_child_h {
+                            max_child_h = ch;
+                        }
+                    }
+                }
+                let content_h = max_child_h + layout.pad_t + layout.pad_b;
+                let eff_scroll = if scroll_axis == 1 {
+                    let max_scroll = (content_h - rect.height).max(0.0);
+                    let clamped = req_scroll.clamp(0.0, max_scroll);
+                    if let Some(n) = self.nodes.get_mut(&node_id) {
+                        n.content_extent_px = content_h;
+                        n.eff_scroll_px = clamped;
+                    }
+                    clamped
+                } else {
+                    0.0
+                };
+                // Leave 10px right gutter for scrollbar when vertically overflowing
+                let scroll_gutter = if scroll_axis == 1 && content_h > rect.height + 2.0 {
+                    10.0
+                } else {
+                    0.0
+                };
+                let box_inner_w = (inner_w - scroll_gutter).max(0.0);
+
                 for child_id in children {
                     let (cw, ch) = self
                         .nodes
                         .get(&child_id)
                         .map(|c| {
                             let w = if c.layout.width > 0.0 {
-                                c.layout.width
+                                c.layout.width.min(if scroll_gutter > 0.0 { box_inner_w } else { c.layout.width })
                             } else {
-                                inner_w.max(MIN_TOUCH_TARGET_DP)
+                                box_inner_w
                             };
                             let h = if c.layout.height > 0.0 {
                                 c.layout.height
                             } else {
-                                slice_h
+                                inner_h
                             };
-                            (w.max(c.layout.min_w), h)
+                            (w.max(c.layout.min_w).min(c.layout.max_w), h)
                         })
-                        .unwrap_or((inner_w, slice_h));
-                    self.layout_subtree(child_id, Rect::new(inner_x, cy, cw, ch));
+                        .unwrap_or((box_inner_w, inner_h));
+                    let dx = match layout.align {
+                        1 | 4 | 7 => ((box_inner_w - cw) * 0.5).max(0.0), // TopCenter, Center, BottomCenter
+                        2 | 5 | 8 => (box_inner_w - cw).max(0.0),         // TopEnd, CenterEnd, BottomEnd
+                        _ => 0.0,
+                    };
+                    let dy = if scroll_axis == 1 {
+                        -eff_scroll
+                    } else {
+                        match layout.align {
+                            3 | 4 | 5 => ((inner_h - ch) * 0.5).max(0.0), // CenterStart, Center, CenterEnd
+                            6 | 7 | 8 => (inner_h - ch).max(0.0),         // BottomStart, BottomCenter, BottomEnd
+                            _ => 0.0,
+                        }
+                    };
+                    self.layout_subtree(child_id, Rect::new(inner_x + dx, inner_y + dy, cw, ch));
+                }
+            }
+            _ => {
+                // Column (vertical default + optional vertical scroll)
+                let mut fixed_h_sum = 0.0_f32;
+                let mut weight_sum = 0.0_f32;
+                let mut auto_count = 0_usize;
+                for &cid in &children {
+                    if let Some(c) = self.nodes.get(&cid) {
+                        if c.layout.height > 0.0 {
+                            fixed_h_sum += c.layout.height;
+                        } else if c.layout.weight > 0.0 {
+                            weight_sum += c.layout.weight;
+                        } else {
+                            auto_count += 1;
+                        }
+                    } else {
+                        auto_count += 1;
+                    }
+                }
+                let content_h = fixed_h_sum + total_gap + layout.pad_t + layout.pad_b;
+                let eff_scroll = if scroll_axis == 1 {
+                    let max_scroll = (content_h - rect.height).max(0.0);
+                    let clamped = req_scroll.clamp(0.0, max_scroll);
+                    if let Some(n) = self.nodes.get_mut(&node_id) {
+                        n.content_extent_px = content_h;
+                        n.eff_scroll_px = clamped;
+                    }
+                    clamped
+                } else {
+                    0.0
+                };
+                let scroll_gutter = if scroll_axis == 1 && content_h > rect.height + 2.0 {
+                    10.0
+                } else {
+                    0.0
+                };
+                let col_inner_w = (inner_w - scroll_gutter).max(0.0);
+                let rem_h = (inner_h - fixed_h_sum - total_gap).max(0.0);
+                let auto_slice_h = if weight_sum <= 0.0 && auto_count > 0 {
+                    rem_h / (auto_count as f32)
+                } else {
+                    0.0
+                };
+
+                let mut cy = inner_y - eff_scroll;
+                for child_id in children {
+                    let (cw, ch) = self
+                        .nodes
+                        .get(&child_id)
+                        .map(|c| {
+                            let w = if c.layout.width > 0.0 {
+                                c.layout.width.min(if scroll_gutter > 0.0 { col_inner_w } else { c.layout.width })
+                            } else {
+                                col_inner_w
+                            };
+                            let h = if c.layout.height > 0.0 {
+                                c.layout.height
+                            } else if c.layout.weight > 0.0 && weight_sum > 0.0 {
+                                rem_h * (c.layout.weight / weight_sum)
+                            } else {
+                                auto_slice_h
+                            };
+                            (w.max(c.layout.min_w).min(c.layout.max_w), h)
+                        })
+                        .unwrap_or((col_inner_w, auto_slice_h));
+                    let cx = match layout.align {
+                        1 => inner_x + ((col_inner_w - cw) * 0.5).max(0.0), // CenterHorizontally
+                        2 => inner_x + (col_inner_w - cw).max(0.0),         // End
+                        _ => inner_x,
+                    };
+                    self.layout_subtree(child_id, Rect::new(cx, cy, cw, ch));
                     cy += ch + layout.gap;
                 }
             }
@@ -3745,6 +3892,9 @@ impl ApplierSceneGraph {
 
     fn hit_test_node(&self, node_id: u64, pt: Point, required_mask: u32) -> Option<u64> {
         let node = self.nodes.get(&node_id)?;
+        if (node.visual.clip != 0 || node.scroll_axis != 0) && !node.bounds.contains(pt) {
+            return None;
+        }
         for &child_id in node.children.iter().rev() {
             if let Some(hit) = self.hit_test_node(child_id, pt, required_mask) {
                 return Some(hit);
@@ -3752,6 +3902,41 @@ impl ApplierSceneGraph {
         }
         if (node.event_mask & required_mask) != 0 && node.bounds.contains(pt) {
             return Some(node_id);
+        }
+        None
+    }
+
+    /// Deepest-first scroll target lookup with browser-style scroll chaining: skips nested `verticalScroll`
+    /// containers that either have no overflow or are already pinned at the requested scroll boundary.
+    pub fn hit_test_scroll(&self, pt: Point, delta_y: f32) -> Option<(u64, f32)> {
+        self.hit_test_scroll_node(self.root_id, pt, delta_y)
+    }
+
+    fn hit_test_scroll_node(&self, node_id: u64, pt: Point, delta_y: f32) -> Option<(u64, f32)> {
+        let node = self.nodes.get(&node_id)?;
+        if (node.visual.clip != 0 || node.scroll_axis != 0) && !node.bounds.contains(pt) {
+            return None;
+        }
+        for &child_id in node.children.iter().rev() {
+            if let Some(hit) = self.hit_test_scroll_node(child_id, pt, delta_y) {
+                return Some(hit);
+            }
+        }
+        if (node.event_mask & event_mask::SCROLL) != 0 && node.bounds.contains(pt) {
+            if node.scroll_axis == 1 {
+                let max_scroll = (node.content_extent_px - node.bounds.height).max(0.0);
+                if max_scroll <= 1.0 {
+                    return None;
+                }
+                if delta_y > 0.0 && node.eff_scroll_px >= max_scroll - 0.5 {
+                    return None;
+                }
+                if delta_y < 0.0 && node.eff_scroll_px <= 0.5 {
+                    return None;
+                }
+                return Some((node_id, max_scroll));
+            }
+            return Some((node_id, -1.0));
         }
         None
     }
@@ -3779,6 +3964,15 @@ impl ApplierSceneGraph {
         viewport: Rect,
         theme: &ThemeDescriptor,
     ) -> (Vec<SdfPrimitiveInstance>, usize) {
+        self.build_gpu_instances_with_power(viewport, theme, PowerMode::Performance)
+    }
+
+    pub fn build_gpu_instances_with_power(
+        &self,
+        viewport: Rect,
+        theme: &ThemeDescriptor,
+        power_mode: PowerMode,
+    ) -> (Vec<SdfPrimitiveInstance>, usize) {
         let mut out = Vec::with_capacity(self.nodes.len() * 4 + 64);
         let bg_col = theme.colors.background.to_array();
         let full_clip = [
@@ -3787,6 +3981,11 @@ impl ApplierSceneGraph {
             viewport.width.max(1.0),
             viewport.height.max(1.0),
         ];
+        let bg_mat = if power_mode == PowerMode::PowerSaving {
+            ShaderMaterialId::StandardSdf
+        } else {
+            ShaderMaterialId::ElectricJellyfish
+        };
         out.push(SdfPrimitiveInstance {
             rect: full_clip,
             corner_radii: [0.0; 4],
@@ -3799,7 +3998,7 @@ impl ApplierSceneGraph {
                 0.0,
                 0.0,
                 2.0,
-                ShaderMaterialId::ElectricJellyfish as u32 as f32,
+                bg_mat as u32 as f32,
             ],
         });
 
@@ -3829,8 +4028,12 @@ impl ApplierSceneGraph {
         if b.width <= 0.5 || b.height <= 0.5 {
             return;
         }
-        let node_clip = if node.visual.clip != 0 {
-            parent_clip.intersect(&b)
+        let vis_check = parent_clip.intersect(&b);
+        if vis_check.width <= 0.5 || vis_check.height <= 0.5 {
+            return;
+        }
+        let node_clip = if node.visual.clip != 0 || node.scroll_axis != 0 {
+            vis_check
         } else {
             parent_clip
         };
@@ -3848,25 +4051,35 @@ impl ApplierSceneGraph {
             *widget_nodes += 1;
             let is_pressed = self.pressed_node_id == Some(node_id);
             let fill_c = if node.visual.bg_rgba != 0 {
-                Color::from_hex(node.visual.bg_rgba)
+                Color::from_argb(node.visual.bg_rgba)
             } else if node.kind == 5 {
                 theme.colors.primary.with_alpha(0.76)
             } else {
                 theme.colors.surface_container.with_alpha(0.68)
             };
             let border_c = if node.visual.border_rgba != 0 {
-                Color::from_hex(node.visual.border_rgba)
+                Color::from_argb(node.visual.border_rgba)
             } else {
                 theme.colors.outline
             };
             let mat = if node.image.is_some() {
                 ShaderMaterialId::TexturedImage
             } else if node.shader.shader_id == 0 {
-                ShaderMaterialId::SubtleGlassReflection
+                ShaderMaterialId::StandardSdf
             } else {
                 ShaderMaterialId::from_u32(node.shader.shader_id as u32)
             };
-            let border_fx = BorderShaderEffect::PulsingFieryBorder;
+            let border_fx = match node.shader.p3.round() as i32 {
+                1 => BorderShaderEffect::FireBorder,
+                2 => BorderShaderEffect::GentleSmokeBorder,
+                3 => BorderShaderEffect::PulsingFieryBorder,
+                _ => BorderShaderEffect::None,
+            };
+            let shadow_blur = if border_fx != BorderShaderEffect::None {
+                6.0
+            } else {
+                0.0
+            };
             let radius = if node.visual.corner_radius > 0.0 {
                 node.visual.corner_radius
             } else {
@@ -3874,8 +4087,10 @@ impl ApplierSceneGraph {
             };
             let bw = if node.visual.border_w > 0.0 {
                 node.visual.border_w
+            } else if node.visual.border_rgba != 0 {
+                theme.shapes.border_width.max(1.2)
             } else {
-                theme.shapes.border_width.max(1.4)
+                0.0
             };
             let box_rect = if is_pressed {
                 StandardBenchmarkApp::apply_jello_wobble(b, self.press_jello_spring.value)
@@ -3889,54 +4104,81 @@ impl ApplierSceneGraph {
                 fill_color_start: fill_c.to_array(),
                 fill_color_end: fill_c.to_array(),
                 border_color: border_c.to_array(),
-                shadow_color: [0.0, 0.0, 0.0, 0.35],
+                shadow_color: [0.0, 0.0, 0.0, 0.28],
                 params: [
                     bw,
-                    6.0,
+                    shadow_blur,
                     theme.shapes.shape_exponent_p,
                     pack_material_and_border(mat, border_fx),
                 ],
             });
             if let Some(&smoke_age) = self.smoking_nodes.get(&node_id) {
-                let smoke_a = ((smoke_age + 0.08) * 0.65).clamp(0.05, 0.42);
-                out.push(SdfPrimitiveInstance {
-                    rect: box_rect,
-                    corner_radii: [radius; 4],
-                    clip_rect: node_clip.to_array(),
-                    fill_color_start: [0.84, 0.90, 0.98, smoke_a],
-                    fill_color_end: [0.84, 0.90, 0.98, smoke_a],
-                    border_color: [0.0; 4],
-                    shadow_color: [0.0; 4],
-                    params: [
-                        0.0,
-                        0.0,
-                        theme.shapes.shape_exponent_p,
-                        pack_material_and_border(
-                            ShaderMaterialId::GentleSmoke,
-                            BorderShaderEffect::None,
-                        ),
-                    ],
-                });
+                let u = (smoke_age / 0.75).clamp(0.0, 1.0);
+                let smoke_a = (u * (1.0 - u) * 4.0) * 0.20;
+                if smoke_a > 0.005 {
+                    out.push(SdfPrimitiveInstance {
+                        rect: box_rect,
+                        corner_radii: [radius; 4],
+                        clip_rect: node_clip.to_array(),
+                        fill_color_start: [0.84, 0.90, 0.98, smoke_a],
+                        fill_color_end: [0.84, 0.90, 0.98, smoke_a],
+                        border_color: [0.0; 4],
+                        shadow_color: [0.0; 4],
+                        params: [
+                            0.0,
+                            0.0,
+                            theme.shapes.shape_exponent_p,
+                            pack_material_and_border(
+                                ShaderMaterialId::GentleSmoke,
+                                BorderShaderEffect::None,
+                            ),
+                        ],
+                    });
+                }
             }
         }
 
         if let Some(txt) = &node.text {
             if !txt.text.is_empty() {
                 let col = if txt.color_rgba != 0 {
-                    Color::from_hex(txt.color_rgba)
+                    Color::from_argb(txt.color_rgba)
                 } else if node.kind == 5 {
                     theme.colors.on_primary
                 } else {
                     theme.colors.on_surface
                 };
-                let is_headline = txt.font_size_sp >= 20.0 || txt.font_weight >= 600;
-                let ty = b.y + ((b.height - if is_headline { 28.0 } else { 22.0 }) * 0.5).max(3.0);
+                let is_headline = txt.font_size_sp >= 18.0;
+                let text_w = measure_text_sized_px(&txt.text, is_headline);
+                let tx = match node.layout.align {
+                    1 | 4 | 7 => (b.x + (b.width - text_w) * 0.5).max(b.x + 3.0),
+                    2 | 5 | 8 => (b.x + b.width - node.layout.pad_r - text_w).max(b.x + 3.0),
+                    _ => {
+                        if node.kind == 5 {
+                            (b.x + (b.width - text_w) * 0.5).max(b.x + 4.0)
+                        } else if has_box {
+                            b.x + node.layout.pad_l.max(8.0)
+                        } else {
+                            b.x + node.layout.pad_l
+                        }
+                    }
+                };
+                let ty = b.y + ((b.height - if is_headline { 23.0 } else { 18.0 }) * 0.5).max(-3.0);
+                let text_clip = if has_box {
+                    node_clip.intersect(&Rect::new(b.x - 1.0, b.y - 2.0, b.width + 4.0, b.height + 4.0))
+                } else {
+                    node_clip.intersect(&Rect::new(
+                        b.x - 1.0,
+                        b.y - 4.0,
+                        b.width + 13.0,
+                        b.height + 12.0,
+                    ))
+                };
                 push_gpu_text_glyphs(
                     out,
-                    Point::new(b.x + 14.0, ty),
+                    Point::new(tx, ty),
                     &txt.text,
                     col,
-                    node_clip.intersect(&b),
+                    text_clip,
                     is_headline,
                 );
             }
@@ -3944,6 +4186,238 @@ impl ApplierSceneGraph {
 
         for &child_id in &node.children {
             self.emit_node_gpu_instances(child_id, node_clip, theme, out, widget_nodes);
+        }
+
+        // Render sleek crimson scrollbar indicator when vertically overflowing
+        if node.scroll_axis == 1 && node.content_extent_px > b.height + 2.0 {
+            let max_scroll = (node.content_extent_px - b.height).max(1.0);
+            let track_h = (b.height - 8.0).max(16.0);
+            let track_x = b.x + b.width - 7.0;
+            let track_y = b.y + 4.0;
+            let thumb_h = ((b.height / node.content_extent_px) * track_h).clamp(24.0, track_h);
+            let thumb_y = track_y + (node.eff_scroll_px / max_scroll).clamp(0.0, 1.0) * (track_h - thumb_h);
+            out.push(SdfPrimitiveInstance {
+                rect: [track_x, track_y, 5.0, track_h],
+                corner_radii: [2.5; 4],
+                clip_rect: node_clip.to_array(),
+                fill_color_start: [0.16, 0.06, 0.10, 0.55],
+                fill_color_end: [0.16, 0.06, 0.10, 0.55],
+                border_color: [0.0; 4],
+                shadow_color: [0.0; 4],
+                params: [0.0, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
+            });
+            out.push(SdfPrimitiveInstance {
+                rect: [track_x, thumb_y, 5.0, thumb_h],
+                corner_radii: [2.5; 4],
+                clip_rect: node_clip.to_array(),
+                fill_color_start: [0.90, 0.22, 0.34, 0.88],
+                fill_color_end: [0.90, 0.22, 0.34, 0.88],
+                border_color: [0.0; 4],
+                shadow_color: [0.0; 4],
+                params: [0.0, 0.0, 2.0, ShaderMaterialId::StandardSdf as u32 as f32],
+            });
+        }
+    }
+
+    /// Renders `ApplierImagePayload` (`Image` / `SET_IMAGE_BYTES`) textures and `ApplierTextPayload`
+    /// (`Text` / `Button` / `TextField`) typography onto `fb_rgba` when running on platforms without
+    /// a hardware Vulkan swapchain (WebAssembly, macOS, Windows, or headless CPU rendering).
+    pub fn render_cpu_images_and_text(
+        &self,
+        fb_w: u32,
+        fb_h: u32,
+        theme: &ThemeDescriptor,
+        fb_rgba: &mut [u8],
+    ) {
+        if fb_w < 64 || fb_h < 40 {
+            return;
+        }
+        let full_clip = Rect::new(0.0, 0.0, fb_w as f32, fb_h as f32);
+        self.render_node_cpu_images_and_text(self.root_id, full_clip, theme, fb_w, fb_h, fb_rgba);
+    }
+
+    fn render_node_cpu_images_and_text(
+        &self,
+        node_id: u64,
+        parent_clip: Rect,
+        theme: &ThemeDescriptor,
+        fb_w: u32,
+        fb_h: u32,
+        fb_rgba: &mut [u8],
+    ) {
+        let Some(node) = self.nodes.get(&node_id) else {
+            return;
+        };
+        let b = node.bounds;
+        if b.width <= 0.5 || b.height <= 0.5 {
+            return;
+        }
+        let vis_check = parent_clip.intersect(&b);
+        if vis_check.width <= 0.5 || vis_check.height <= 0.5 {
+            return;
+        }
+        let node_clip = if node.visual.clip != 0 || node.scroll_axis != 0 {
+            vis_check
+        } else {
+            parent_clip
+        };
+
+        let has_box = node_id != self.root_id
+            && (node.visual.bg_rgba != 0
+                || node.visual.border_w > 0.0
+                || node.shader.shader_id != 0
+                || node.image.is_some()
+                || node.kind == 5
+                || node.kind == 6
+                || node.kind == 7);
+
+        if let Some(img) = &node.image {
+            if img.width > 0
+                && img.height > 0
+                && img.rgba_bytes.len() >= (img.width as usize * img.height as usize * 4)
+            {
+                let inset = node.visual.border_w.max(1.0);
+                let dst_x0 = (b.x + inset).max(node_clip.x).max(0.0).ceil() as u32;
+                let dst_y0 = (b.y + inset).max(node_clip.y).max(0.0).ceil() as u32;
+                let dst_x1 = (b.x + b.width - inset)
+                    .min(node_clip.x + node_clip.width)
+                    .min(fb_w as f32)
+                    .floor()
+                    .max(0.0) as u32;
+                let dst_y1 = (b.y + b.height - inset)
+                    .min(node_clip.y + node_clip.height)
+                    .min(fb_h as f32)
+                    .floor()
+                    .max(0.0) as u32;
+
+                let inner_w = (b.width - inset * 2.0).max(1.0);
+                let inner_h = (b.height - inset * 2.0).max(1.0);
+                let radius = (node.visual.corner_radius - inset).max(0.0);
+                let r_sq = radius * radius;
+
+                if dst_x0 < dst_x1 && dst_y0 < dst_y1 {
+                    let span_w = (dst_x1 - dst_x0) as usize;
+                    let mut sx_lut = Vec::with_capacity(span_w);
+                    for px in dst_x0..dst_x1 {
+                        let fx = px as f32 + 0.5 - (b.x + inset);
+                        let sx = (((fx / inner_w) * img.width as f32).floor() as u32)
+                            .min(img.width - 1) as usize
+                            * 4;
+                        sx_lut.push(sx);
+                    }
+                    for py in dst_y0..dst_y1 {
+                        let fy = py as f32 + 0.5 - (b.y + inset);
+                        let sy = (((fy / inner_h) * img.height as f32).floor() as u32)
+                            .min(img.height - 1);
+                        let src_row = (sy * img.width) as usize * 4;
+                        let dst_row = (py * fb_w) as usize * 4;
+
+                        let dy_corner = if radius > 0.5 {
+                            if fy < radius {
+                                radius - fy
+                            } else if fy > inner_h - radius {
+                                fy - (inner_h - radius)
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+
+                        for (i, px) in (dst_x0..dst_x1).enumerate() {
+                            if dy_corner > 0.0 {
+                                let fx = px as f32 + 0.5 - (b.x + inset);
+                                let dx_corner = if fx < radius {
+                                    radius - fx
+                                } else if fx > inner_w - radius {
+                                    fx - (inner_w - radius)
+                                } else {
+                                    0.0
+                                };
+                                if dx_corner > 0.0
+                                    && dx_corner * dx_corner + dy_corner * dy_corner > r_sq
+                                {
+                                    continue;
+                                }
+                            }
+
+                            let s_idx = src_row + sx_lut[i];
+                            let d_idx = dst_row + px as usize * 4;
+                            let sa = img.rgba_bytes[s_idx + 3] as u32;
+                            if sa == 255 {
+                                fb_rgba[d_idx] = img.rgba_bytes[s_idx];
+                                fb_rgba[d_idx + 1] = img.rgba_bytes[s_idx + 1];
+                                fb_rgba[d_idx + 2] = img.rgba_bytes[s_idx + 2];
+                                fb_rgba[d_idx + 3] = 255;
+                            } else if sa > 0 {
+                                let inv = 255 - sa;
+                                fb_rgba[d_idx] = ((fb_rgba[d_idx] as u32 * inv
+                                    + img.rgba_bytes[s_idx] as u32 * sa)
+                                    / 255) as u8;
+                                fb_rgba[d_idx + 1] = ((fb_rgba[d_idx + 1] as u32 * inv
+                                    + img.rgba_bytes[s_idx + 1] as u32 * sa)
+                                    / 255) as u8;
+                                fb_rgba[d_idx + 2] = ((fb_rgba[d_idx + 2] as u32 * inv
+                                    + img.rgba_bytes[s_idx + 2] as u32 * sa)
+                                    / 255) as u8;
+                                fb_rgba[d_idx + 3] = 255;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(txt) = &node.text {
+            if !txt.text.is_empty() {
+                let col = if txt.color_rgba != 0 {
+                    Color::from_argb(txt.color_rgba)
+                } else if node.kind == 5 {
+                    theme.colors.on_primary
+                } else {
+                    theme.colors.on_surface
+                };
+                let is_headline = txt.font_size_sp >= 18.0;
+                let text_w = measure_text_sized_px(&txt.text, is_headline);
+                let tx = match node.layout.align {
+                    1 | 4 | 7 => (b.x + (b.width - text_w) * 0.5).max(b.x + 3.0),
+                    2 | 5 | 8 => (b.x + b.width - node.layout.pad_r - text_w).max(b.x + 3.0),
+                    _ => {
+                        if node.kind == 5 {
+                            (b.x + (b.width - text_w) * 0.5).max(b.x + 4.0)
+                        } else if has_box {
+                            b.x + node.layout.pad_l.max(8.0)
+                        } else {
+                            b.x + node.layout.pad_l
+                        }
+                    }
+                };
+                let ty = b.y + ((b.height - if is_headline { 23.0 } else { 18.0 }) * 0.5).max(-3.0);
+                let text_clip = if has_box {
+                    node_clip.intersect(&Rect::new(b.x - 1.0, b.y - 2.0, b.width + 4.0, b.height + 4.0))
+                } else {
+                    node_clip.intersect(&Rect::new(
+                        b.x - 1.0,
+                        b.y - 4.0,
+                        b.width + 13.0,
+                        b.height + 12.0,
+                    ))
+                };
+                draw_text_sized_rgba(
+                    fb_rgba,
+                    fb_w,
+                    fb_h,
+                    Point::new(tx, ty),
+                    &txt.text,
+                    col,
+                    text_clip,
+                    is_headline,
+                );
+            }
+        }
+
+        for &child_id in &node.children {
+            self.render_node_cpu_images_and_text(child_id, node_clip, theme, fb_w, fb_h, fb_rgba);
         }
     }
 }
@@ -4405,6 +4879,17 @@ impl IguanodonTestHarness {
             let dy = pt.y - prev_pt.y;
             if dx.abs() > 0.1 || dy.abs() > 0.1 {
                 self.applier_scene.active_drag_node_id = Some((drag_node_id, pt));
+                let (nx, ny) = self
+                    .applier_scene
+                    .nodes
+                    .get(&drag_node_id)
+                    .map(|n| {
+                        (
+                            ((pt.x - n.bounds.x) / n.bounds.width.max(1.0)).clamp(0.0, 1.0),
+                            ((pt.y - n.bounds.y) / n.bounds.height.max(1.0)).clamp(0.0, 1.0),
+                        )
+                    })
+                    .unwrap_or((0.0, 0.0));
                 self.push_reverse_event(ReverseUiEvent {
                     event_type: ReverseEventType::DragDelta,
                     flags: 0,
@@ -4412,8 +4897,8 @@ impl IguanodonTestHarness {
                     node_id: drag_node_id,
                     f0: dx,
                     f1: dy,
-                    f2: pt.x,
-                    f3: pt.y,
+                    f2: nx,
+                    f3: ny,
                 });
             }
         }
@@ -4496,6 +4981,27 @@ impl IguanodonTestHarness {
             if let Some(drag_id) = self.applier_scene.hit_test_masked(pt, event_mask::DRAG) {
                 if drag_id >= 100 {
                     self.applier_scene.active_drag_node_id = Some((drag_id, pt));
+                    let (nx, ny) = self
+                        .applier_scene
+                        .nodes
+                        .get(&drag_id)
+                        .map(|n| {
+                            (
+                                ((pt.x - n.bounds.x) / n.bounds.width.max(1.0)).clamp(0.0, 1.0),
+                                ((pt.y - n.bounds.y) / n.bounds.height.max(1.0)).clamp(0.0, 1.0),
+                            )
+                        })
+                        .unwrap_or((0.0, 0.0));
+                    self.push_reverse_event(ReverseUiEvent {
+                        event_type: ReverseEventType::DragDelta,
+                        flags: 1,
+                        aux_u32: 0,
+                        node_id: drag_id,
+                        f0: 0.0,
+                        f1: 0.0,
+                        f2: nx,
+                        f3: ny,
+                    });
                 }
             }
             if let Some(click_id) = self
@@ -4503,9 +5009,17 @@ impl IguanodonTestHarness {
                 .hit_test_masked(pt, event_mask::CLICK | event_mask::TEXT_INPUT)
             {
                 if click_id >= 100 {
+                    let is_btn = self
+                        .applier_scene
+                        .nodes
+                        .get(&click_id)
+                        .map(|n| n.kind == 5)
+                        .unwrap_or(false);
                     self.applier_scene.focused_node_id = Some(click_id);
                     self.applier_scene.pressed_node_id = Some(click_id);
-                    self.applier_scene.smoking_nodes.entry(click_id).or_insert(0.0);
+                    if is_btn {
+                        self.applier_scene.smoking_nodes.insert(click_id, 0.0);
+                    }
                     self.applier_scene.press_jello_spring.value = 1.0;
                     self.applier_scene.press_jello_spring.set_target(0.0);
                     self.applier_scene.press_smoke_spring.value = 1.0;
@@ -4704,17 +5218,21 @@ impl IguanodonTestHarness {
 
     /// Coordinate-based mouse wheel scroll handler.
     pub fn on_scroll_wheel(&mut self, pt: Point, delta_y: f32) {
-        if let Some(scroll_id) = self.applier_scene.hit_test_masked(pt, event_mask::SCROLL) {
+        if self.applier_scene.active_drag_node_id.is_some() {
+            return;
+        }
+        if let Some((scroll_id, max_scroll)) = self.applier_scene.hit_test_scroll(pt, delta_y) {
             self.push_reverse_event(ReverseUiEvent {
                 event_type: ReverseEventType::ScrollDelta,
                 flags: 0,
                 aux_u32: 0,
                 node_id: scroll_id,
-                f0: 0.0,
+                f0: max_scroll,
                 f1: delta_y,
                 f2: pt.x,
                 f3: pt.y,
             });
+            return;
         }
         if let Some(r) = self.app.layout.bounds(bench_nodes::SCROLLABLE_TEXT) {
             if r.contains(pt) {
@@ -4763,8 +5281,11 @@ impl IguanodonTestHarness {
 
         let pack_start = FrameTimer::now();
         let (gpu_instances, materialized_nodes) = if self.applier_scene.is_custom_app_scene() {
-            self.applier_scene
-                .build_gpu_instances(self.app.viewport, &self.app.current_theme)
+            self.applier_scene.build_gpu_instances_with_power(
+                self.app.viewport,
+                &self.app.current_theme,
+                self.app.power_mode,
+            )
         } else {
             self.app.build_complete_gpu_instances()
         };
@@ -4825,7 +5346,11 @@ impl IguanodonTestHarness {
             let pack_start = FrameTimer::now();
             let (gpu_instances, materialized_nodes) = self
                 .applier_scene
-                .build_gpu_instances(self.app.viewport, &self.app.current_theme);
+                .build_gpu_instances_with_power(
+                    self.app.viewport,
+                    &self.app.current_theme,
+                    self.app.power_mode,
+                );
             let sdf_pack_us = pack_start.elapsed_secs_f32() * 1_000_000.0;
 
             let vk_stats = self.vk.render_frame(
@@ -4837,6 +5362,14 @@ impl IguanodonTestHarness {
                 height,
                 &mut self.framebuffer_rgba,
             );
+            if !vk_stats.hardware_vulkan_active {
+                self.applier_scene.render_cpu_images_and_text(
+                    width,
+                    height,
+                    &self.app.current_theme,
+                    &mut self.framebuffer_rgba,
+                );
+            }
             let total_frame_ms = frame_start.elapsed_secs_f32() * 1_000.0;
             let sample = FrameSample {
                 total_frame_ms,

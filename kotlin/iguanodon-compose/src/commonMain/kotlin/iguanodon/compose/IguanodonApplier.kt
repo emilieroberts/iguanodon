@@ -509,6 +509,7 @@ class IguanodonNode(
     var onLongClick: (() -> Unit)? = null
     var onHoverChanged: ((Boolean) -> Unit)? = null
     var onDragDelta: ((Float, Float) -> Unit)? = null
+    var onNormalizedDrag: ((Boolean, Float, Float) -> Unit)? = null
     var onScrollDelta: ((Float, Float) -> Unit)? = null
     var onTextChange: ((String) -> Unit)? = null
     var textValue: String = ""

@@ -2601,7 +2601,11 @@ impl VulkanRenderer {
                 }
             }
         }
-        self.textures.push(tex);
+        if self.textures.is_empty() {
+            self.textures.push(tex);
+        } else {
+            self.textures[0] = tex;
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -4151,7 +4155,8 @@ impl VulkanRenderer {
                                     * 0.06;
                             let span_slice =
                                 &mut row[(span_min_x as usize * 4)..(span_max_x as usize * 4)];
-                            for px_out in span_slice.chunks_exact_mut(4) {
+                            let step8 = sweep_step * 8.0;
+                            for group in span_slice.chunks_mut(32) {
                                 let b1 = (1.0 - ((sweep - 0.46).abs() * 5.2)).clamp(0.0, 1.0);
                                 let b2 = (1.0 - ((sweep - 0.72).abs() * 9.0)).clamp(0.0, 1.0);
                                 let refl =
@@ -4162,11 +4167,13 @@ impl VulkanRenderer {
                                 let fr = ((base_r + (0.90 - base_r) * refl) * 255.0) as u32 * a256;
                                 let fg = ((base_g + (0.96 - base_g) * refl) * 255.0) as u32 * a256;
                                 let fb = ((base_b + (1.00 - base_b) * refl) * 255.0) as u32 * a256;
-                                px_out[0] = ((px_out[0] as u32 * inv_a256 + fr) >> 8) as u8;
-                                px_out[1] = ((px_out[1] as u32 * inv_a256 + fg) >> 8) as u8;
-                                px_out[2] = ((px_out[2] as u32 * inv_a256 + fb) >> 8) as u8;
-                                px_out[3] = 255;
-                                sweep += sweep_step;
+                                for px_out in group.chunks_exact_mut(4) {
+                                    px_out[0] = ((px_out[0] as u32 * inv_a256 + fr) >> 8) as u8;
+                                    px_out[1] = ((px_out[1] as u32 * inv_a256 + fg) >> 8) as u8;
+                                    px_out[2] = ((px_out[2] as u32 * inv_a256 + fb) >> 8) as u8;
+                                    px_out[3] = 255;
+                                }
+                                sweep += step8;
                             }
                         } else {
                             // Constant-Y horizontal span blend across [span_min_x, span_max_x)
@@ -4407,8 +4414,10 @@ impl VulkanRenderer {
                                     px_out[3] = 255;
                                 }
                             }
-                        } else if p.has_fire_border && span_min_x + 4 <= span_max_x {
-                            // 4-pixel interpolated span for top/bottom smoke & fire tendrils
+                        } else if span_min_x + 4 <= span_max_x {
+                            // Interpolated span for top/bottom smoke, fire tendrils, or SubtleGlassReflection edges
+                            let stride = if p.has_fire_border { 4_u32 } else { 8_u32 };
+                            let inv_stride = 1.0 / (stride as f32);
                             let mut x = span_min_x;
                             let (mut fg_prev, mut a_prev) =
                                 iguanodon_shaders::evaluate_sdf_instance_foreground(
@@ -4418,18 +4427,18 @@ impl VulkanRenderer {
                                     pointer,
                                     time_sec,
                                 );
-                            while x + 4 <= span_max_x {
+                            while x + stride <= span_max_x {
                                 let (fg_next, a_next) =
                                     iguanodon_shaders::evaluate_sdf_instance_foreground(
                                         inst,
-                                        (x + 4) as f32 + 0.5,
+                                        (x + stride) as f32 + 0.5,
                                         py,
                                         pointer,
                                         time_sec,
                                     );
                                 if a_prev > 0.002 || a_next > 0.002 {
-                                    for step in 0..4_u32 {
-                                        let t = step as f32 * 0.25;
+                                    for step in 0..stride {
+                                        let t = step as f32 * inv_stride;
                                         let eff_alpha = a_prev + (a_next - a_prev) * t;
                                         if eff_alpha > 0.002 {
                                             let fg_c = fg_prev.lerp(fg_next, t);
@@ -4451,7 +4460,7 @@ impl VulkanRenderer {
                                 }
                                 fg_prev = fg_next;
                                 a_prev = a_next;
-                                x += 4;
+                                x += stride;
                             }
                             for x in x..span_max_x {
                                 let idx = (x as usize) * 4;

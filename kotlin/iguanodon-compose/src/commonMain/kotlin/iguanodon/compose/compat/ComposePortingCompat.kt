@@ -736,12 +736,17 @@ fun Text(
     }
     val resolvedSize = if (!fontSize.value.isNaN()) fontSize.value else style.fontSize.value
     val resolvedWeight = (fontWeight ?: style.fontWeight).weight
+    val resolvedAlign: Byte = when (textAlign ?: style.textAlign) {
+        TextAlign.Center -> 1
+        TextAlign.End, TextAlign.Right -> 2
+        else -> 0
+    }
 
     ComposeNode<IguanodonNode, IguanodonApplier>(
         factory = { IguanodonNode(nodeId = resolvedId, nodeKind = NodeKinds.TEXT) },
         update = {
             set(modifier) { mod ->
-                session?.syncModifierToNode(this, mod)
+                session?.syncModifierToNode(this, mod, align = resolvedAlign)
             }
             set(text) { str ->
                 this.textValue = str
