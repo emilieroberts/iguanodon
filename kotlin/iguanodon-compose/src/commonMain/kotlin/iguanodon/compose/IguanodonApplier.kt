@@ -645,7 +645,7 @@ class IguanodonCompositionHost(
             }
         }
         Snapshot.sendApplyNotifications()
-        frameClock.sendFrame(System.nanoTime())
+        frameClock.sendFrame(kotlin.time.TimeSource.Monotonic.markNow().elapsedNow().inWholeNanoseconds)
         session.flushPendingCommands()
     }
 

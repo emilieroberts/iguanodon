@@ -50,12 +50,23 @@ if [[ -n "${GLSLC_BIN}" ]]; then
         -o "${ROOT_DIR}/crates/iguanodon-shaders/shaders/sdf_uber.frag.spv"
 fi
 
-# 2. Build Linux x86_64 release libraries (.so and .a)
+# 2. Build Linux x86_64 release libraries (.so and .a) & WebAssembly (wasm32-unknown-unknown)
 echo "[*] Building Linux x86_64 release libraries (libiguanodon_ffi.so & libiguanodon_ffi.a)..."
 cd "${ROOT_DIR}"
 cargo build --release -p iguanodon-ffi
 cp "${ROOT_DIR}/target/release/libiguanodon_ffi.so" "${DIST_DIR}/native/linux-x86_64/libiguanodon_ffi.so"
 cp "${ROOT_DIR}/target/release/libiguanodon_ffi.a" "${DIST_DIR}/native/linux-x86_64/libiguanodon_ffi.a"
+
+if rustup target list --installed 2>/dev/null | grep -q "wasm32-unknown-unknown"; then
+    echo "[*] Building WebAssembly release binary (iguanodon_ffi.wasm)..."
+    cargo build --release --target wasm32-unknown-unknown -p iguanodon-ffi
+    WASM_BIN="${ROOT_DIR}/target/wasm32-unknown-unknown/release/iguanodon_ffi.wasm"
+    if [[ -f "${WASM_BIN}" ]]; then
+        mkdir -p "${DIST_DIR}/native/wasm32-unknown-unknown"
+        cp "${WASM_BIN}" "${DIST_DIR}/native/wasm32-unknown-unknown/iguanodon_ffi.wasm"
+        echo "[+] Included WebAssembly iguanodon_ffi.wasm"
+    fi
+fi
 
 # 3. Cross-compile & copy Android arm64-v8a (and x86_64) release libraries if NDK is available
 if [[ -n "${NDK_DIR}" && -d "${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin" ]]; then
@@ -216,6 +227,10 @@ float iguanodon_render_frame_rgba(
     uint32_t fb_height,
     uint8_t* out_rgba_ptr
 );
+
+const uint8_t* iguanodon_framebuffer_ptr(const IguanodonEngine* engine_ptr);
+uint8_t* iguanodon_wasm_alloc(size_t byte_len);
+void iguanodon_wasm_free(uint8_t* ptr, size_t byte_len);
 
 #ifdef __cplusplus
 }

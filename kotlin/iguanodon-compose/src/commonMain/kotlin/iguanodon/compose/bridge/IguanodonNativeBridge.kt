@@ -25,143 +25,48 @@ import iguanodon.compose.IguanodonPowerMode
 import iguanodon.compose.IguanodonRendererBackend
 import iguanodon.compose.IguanodonThemeMode
 import iguanodon.compose.ReverseEventTypes
-import java.io.File
-import java.io.FileOutputStream
 
 /**
- * Shared JNI / C-ABI bridge to `libiguanodon_ffi.so` (`crates/iguanodon-ffi/src/lib.rs`).
- * Identical native entrypoints (`Java_iguanodon_compose_bridge_IguanodonNativeBridge_*`)
- * are used on both Android (`arm64-v8a` / `x86_64`) and Desktop JVM (`Linux` / `Windows` / `macOS`).
+ * Multiplatform native/WebAssembly bridge to `iguanodon_ffi`:
+ * - **Android / Linux / Windows / macOS**: JNI (`libiguanodon_ffi.so`, `iguanodon_ffi.dll`, `libiguanodon_ffi.dylib`)
+ * - **Web (`jsMain`)**: WebAssembly (`iguanodon_ffi.wasm`)
+ * - **iOS (`iosMain`)**: Static C-ABI (`libiguanodon_ffi.a`)
  */
-object IguanodonNativeBridge {
-    var isNativeLoaded: Boolean = false
-        private set
+expect object IguanodonNativeBridge {
+    val isNativeLoaded: Boolean
 
-    init {
-        try {
-            System.loadLibrary("iguanodon_ffi")
-            isNativeLoaded = true
-        } catch (_: UnsatisfiedLinkError) {
-            try {
-                val stream = IguanodonNativeBridge::class.java.getResourceAsStream(
-                    "/META-INF/native/linux-x86_64/libiguanodon_ffi.so",
-                )
-                if (stream != null) {
-                    val tmp = File.createTempFile("libiguanodon_ffi_", ".so")
-                    tmp.setReadable(false, false)
-                    tmp.setReadable(true, true)
-                    tmp.setWritable(false, false)
-                    tmp.setWritable(true, true)
-                    tmp.setExecutable(false, false)
-                    tmp.setExecutable(true, true)
-                    tmp.deleteOnExit()
-                    FileOutputStream(tmp).use { out -> stream.copyTo(out) }
-                    System.load(tmp.absolutePath)
-                    isNativeLoaded = true
-                }
-            } catch (_: Throwable) {
-                // Fallback when running without native shared library on classpath
-            }
-        }
-    }
-
-    @JvmStatic
-    external fun nativeCreate(width: Float, height: Float): Long
-
-    @JvmStatic
-    external fun nativeDestroy(handle: Long)
-
-    @JvmStatic
-    external fun nativeResize(handle: Long, width: Float, height: Float)
-
-    @JvmStatic
-    external fun nativeSetSafeInsets(
-        handle: Long,
-        left: Float,
-        top: Float,
-        right: Float,
-        bottom: Float,
-    )
-
-    @JvmStatic
-    external fun nativeFlushCommands(handle: Long, batch: ByteArray): Int
-
-    @JvmStatic
-    external fun nativeFlushDirectBuffer(handle: Long, directBufPtr: Long, byteLen: Int): Int
-
-    @JvmStatic
-    external fun nativePollEvents(handle: Long, outBuffer: ByteArray): Int
-
-    @JvmStatic
-    external fun nativePollEventsDirect(handle: Long, directBufPtr: Long, capacity: Int): Int
-
-    @JvmStatic
-    external fun nativePointerMove(handle: Long, x: Float, y: Float)
-
-    @JvmStatic
-    external fun nativePointerDown(handle: Long, x: Float, y: Float, isRightOrLongPress: Byte)
-
-    @JvmStatic
-    external fun nativePointerUp(handle: Long, x: Float, y: Float)
-
-    @JvmStatic
-    external fun nativeScroll(handle: Long, x: Float, y: Float, deltaY: Float)
-
-    @JvmStatic
-    external fun nativeKeyChar(handle: Long, codepoint: Int)
-
-    @JvmStatic
-    external fun nativeBackspace(handle: Long)
-
-    @JvmStatic
-    external fun nativeSetAndroidSurface(
-        handle: Long,
-        surface: Any?,
-        width: Int,
-        height: Int,
-    ): Boolean
-
-    @JvmStatic
-    external fun nativeRenderAndPresent(
-        handle: Long,
-        dtSec: Float,
-        width: Int,
-        height: Int,
-    ): Float
-
-    @JvmStatic
-    external fun nativeRenderFrameByteArray(
+    fun createEngine(width: Float, height: Float): Long
+    fun destroyEngine(handle: Long)
+    fun resizeEngine(handle: Long, width: Float, height: Float)
+    fun setSafeInsets(handle: Long, left: Float, top: Float, right: Float, bottom: Float)
+    fun flushCommands(handle: Long, batch: ByteArray): Int
+    fun pollEvents(handle: Long, outBuffer: ByteArray): Int
+    fun pointerMove(handle: Long, x: Float, y: Float)
+    fun pointerDown(handle: Long, x: Float, y: Float, isRightOrLongPress: Byte)
+    fun pointerUp(handle: Long, x: Float, y: Float)
+    fun scroll(handle: Long, x: Float, y: Float, deltaY: Float)
+    fun keyChar(handle: Long, codepoint: Int)
+    fun backspace(handle: Long)
+    fun setAndroidSurface(handle: Long, surface: Any?, width: Int, height: Int): Boolean
+    fun renderAndPresent(handle: Long, dtSec: Float, width: Int, height: Int): Float
+    fun renderFrameByteArray(
         handle: Long,
         dtSec: Float,
         width: Int,
         height: Int,
         outRgba: ByteArray,
     ): Float
-
-    @JvmStatic
-    external fun nativeRenderFrameRgba(
-        handle: Long,
-        dtSec: Float,
-        width: Int,
-        height: Int,
-        directRgbaPtr: Long,
-    ): Float
 }
 
 /**
- * Platform-agnostic session controller shared between Android (`IguanodonVulkanSurfaceView`)
- * and Desktop (`IguanodonDesktopWindow`).
- *
- * Collects binary opcodes emitted by `@Composable` functions and `IguanodonApplier` into [encoder],
- * flushes them in a single zero-copy batch per dirty frame, and drains reverse input/window events
- * from `libiguanodon_ffi.so` via [pollEvents].
+ * Platform-agnostic session controller shared across Android, Desktop, iOS, and WebAssembly.
  */
 class IguanodonSession(
     initialWidth: Float = 1180f,
     initialHeight: Float = 760f,
 ) : AutoCloseable {
     var nativeHandle: Long = if (IguanodonNativeBridge.isNativeLoaded) {
-        IguanodonNativeBridge.nativeCreate(initialWidth, initialHeight)
+        IguanodonNativeBridge.createEngine(initialWidth, initialHeight)
     } else {
         0L
     }
@@ -347,7 +252,7 @@ class IguanodonSession(
             viewportWidth = clampedW
             viewportHeight = clampedH
             if (nativeHandle != 0L) {
-                IguanodonNativeBridge.nativeResize(
+                IguanodonNativeBridge.resizeEngine(
                     nativeHandle,
                     clampedW.toFloat(),
                     clampedH.toFloat(),
@@ -362,13 +267,13 @@ class IguanodonSession(
         safeInsetRightDp = right
         safeInsetBottomDp = bottom
         if (nativeHandle != 0L) {
-            IguanodonNativeBridge.nativeSetSafeInsets(nativeHandle, left, top, right, bottom)
+            IguanodonNativeBridge.setSafeInsets(nativeHandle, left, top, right, bottom)
         }
     }
 
     fun flushByteArray(batch: ByteArray): Int {
         if (nativeHandle == 0L || batch.isEmpty()) return 0
-        return IguanodonNativeBridge.nativeFlushCommands(nativeHandle, batch)
+        return IguanodonNativeBridge.flushCommands(nativeHandle, batch)
     }
 
     fun flushPendingCommands(): Int {
@@ -377,17 +282,15 @@ class IguanodonSession(
         return flushByteArray(batch)
     }
 
-    /**
-     * Drains reverse input and viewport events queued by `libiguanodon_ffi.so` and dispatches
-     * them to the registered [IguanodonNode] callbacks on the UI thread.
-     */
     fun pollEvents(): Int {
         if (nativeHandle == 0L) return 0
-        val bytesRead = IguanodonNativeBridge.nativePollEvents(nativeHandle, eventPollBuffer)
+        val bytesRead = IguanodonNativeBridge.pollEvents(nativeHandle, eventPollBuffer)
         if (bytesRead <= 0) return 0
         var count = 0
         var offset = 0
-        while (offset + ReverseEventTypes.RECORD_BYTE_SIZE <= bytesRead) {
+        while (offset + ReverseEventTypes.RECORD_BYTE_SIZE <= bytesRead &&
+            offset + ReverseEventTypes.RECORD_BYTE_SIZE <= eventPollBuffer.size
+        ) {
             val evType = eventPollBuffer[offset].toInt() and 0xFF
             val auxU32 = readIntLe(eventPollBuffer, offset + 4)
             val nodeId = readLongLe(eventPollBuffer, offset + 8)
@@ -397,26 +300,14 @@ class IguanodonSession(
             val f3 = Float.fromBits(readIntLe(eventPollBuffer, offset + 28))
 
             when (evType) {
-                ReverseEventTypes.CLICK -> {
-                    nodeRegistry[nodeId]?.onClick?.invoke()
-                }
+                ReverseEventTypes.CLICK -> nodeRegistry[nodeId]?.onClick?.invoke()
                 ReverseEventTypes.LONG_OR_SECONDARY_CLICK -> {
                     val node = nodeRegistry[nodeId]
-                    if (node?.onLongClick != null) {
-                        node.onLongClick?.invoke()
-                    } else {
-                        node?.onClick?.invoke()
-                    }
+                    if (node?.onLongClick != null) node.onLongClick?.invoke() else node?.onClick?.invoke()
                 }
-                ReverseEventTypes.HOVER_ENTER -> {
-                    nodeRegistry[nodeId]?.onHoverChanged?.invoke(true)
-                }
-                ReverseEventTypes.HOVER_EXIT -> {
-                    nodeRegistry[nodeId]?.onHoverChanged?.invoke(false)
-                }
-                ReverseEventTypes.DRAG_DELTA -> {
-                    nodeRegistry[nodeId]?.onDragDelta?.invoke(f0, f1)
-                }
+                ReverseEventTypes.HOVER_ENTER -> nodeRegistry[nodeId]?.onHoverChanged?.invoke(true)
+                ReverseEventTypes.HOVER_EXIT -> nodeRegistry[nodeId]?.onHoverChanged?.invoke(false)
+                ReverseEventTypes.DRAG_DELTA -> nodeRegistry[nodeId]?.onDragDelta?.invoke(f0, f1)
                 ReverseEventTypes.SCROLL_DELTA -> {
                     val node = nodeRegistry[nodeId]
                     node?.onScrollDelta?.invoke(f0, f1)
@@ -438,11 +329,6 @@ class IguanodonSession(
                         node.onTextChange?.invoke(next)
                     }
                 }
-                ReverseEventTypes.WINDOW_RESIZE -> {
-                    // Viewport size is owned by the host surface (`session.resize(w, h)`)
-                    // so a queued reverse resize event never desynchronizes `viewportWidth`/`viewportHeight`
-                    // from the allocated `frameBitmap` and `rgbaBytes` mid-frame.
-                }
                 ReverseEventTypes.SAFE_INSETS -> {
                     safeInsetLeftDp = f0
                     safeInsetTopDp = f1
@@ -455,23 +341,17 @@ class IguanodonSession(
                 }
                 ReverseEventTypes.POWER_MODE_CHANGED -> {
                     val nextPwr = if (auxU32 == 1) IguanodonPowerMode.PowerSaving else IguanodonPowerMode.Performance
-                    if (powerMode != nextPwr) {
-                        powerMode = nextPwr
-                    }
+                    powerMode = nextPwr
                     onPowerModeChanged?.invoke(nextPwr)
                 }
                 ReverseEventTypes.RENDERER_BACKEND_CHANGED -> {
                     val nextBackend = if (auxU32 == 1) IguanodonRendererBackend.ComposeUi else IguanodonRendererBackend.Iguanodon
-                    if (rendererBackend != nextBackend) {
-                        rendererBackend = nextBackend
-                    }
+                    rendererBackend = nextBackend
                     onRendererBackendChanged?.invoke(nextBackend)
                 }
                 ReverseEventTypes.FRAME_RATE_LIMIT_CHANGED -> {
                     val nextLimit = IguanodonFrameRateLimit.fromCode(auxU32)
-                    if (frameRateLimit != nextLimit) {
-                        frameRateLimit = nextLimit
-                    }
+                    frameRateLimit = nextLimit
                     onFrameRateLimitChanged?.invoke(nextLimit)
                 }
             }
@@ -489,14 +369,14 @@ class IguanodonSession(
 
     fun onPointerMove(x: Float, y: Float) {
         if (nativeHandle != 0L) {
-            IguanodonNativeBridge.nativePointerMove(nativeHandle, x, y)
+            IguanodonNativeBridge.pointerMove(nativeHandle, x, y)
             pollEvents()
         }
     }
 
     fun onPointerDown(x: Float, y: Float, isRightClickOrLongPress: Boolean = false) {
         if (nativeHandle != 0L) {
-            IguanodonNativeBridge.nativePointerDown(
+            IguanodonNativeBridge.pointerDown(
                 nativeHandle,
                 x,
                 y,
@@ -508,28 +388,28 @@ class IguanodonSession(
 
     fun onPointerUp(x: Float, y: Float) {
         if (nativeHandle != 0L) {
-            IguanodonNativeBridge.nativePointerUp(nativeHandle, x, y)
+            IguanodonNativeBridge.pointerUp(nativeHandle, x, y)
             pollEvents()
         }
     }
 
     fun onScroll(x: Float, y: Float, deltaY: Float) {
         if (nativeHandle != 0L) {
-            IguanodonNativeBridge.nativeScroll(nativeHandle, x, y, deltaY)
+            IguanodonNativeBridge.scroll(nativeHandle, x, y, deltaY)
             pollEvents()
         }
     }
 
     fun onKeyChar(ch: Char) {
         if (nativeHandle != 0L) {
-            IguanodonNativeBridge.nativeKeyChar(nativeHandle, ch.code)
+            IguanodonNativeBridge.keyChar(nativeHandle, ch.code)
             pollEvents()
         }
     }
 
     fun onBackspace() {
         if (nativeHandle != 0L) {
-            IguanodonNativeBridge.nativeBackspace(nativeHandle)
+            IguanodonNativeBridge.backspace(nativeHandle)
             pollEvents()
         }
     }
@@ -548,7 +428,7 @@ class IguanodonSession(
             viewportWidth = clampedW
             viewportHeight = clampedH
         }
-        hasVulkanSwapchain = IguanodonNativeBridge.nativeSetAndroidSurface(
+        hasVulkanSwapchain = IguanodonNativeBridge.setAndroidSurface(
             nativeHandle,
             surface,
             clampedW,
@@ -561,7 +441,7 @@ class IguanodonSession(
         flushPendingCommands()
         pollEvents()
         if (nativeHandle == 0L) return 0f
-        latestFrameMs = IguanodonNativeBridge.nativeRenderAndPresent(
+        latestFrameMs = IguanodonNativeBridge.renderAndPresent(
             nativeHandle,
             dtSeconds,
             viewportWidth,
@@ -574,7 +454,7 @@ class IguanodonSession(
         flushPendingCommands()
         pollEvents()
         if (nativeHandle == 0L) return 0f
-        latestFrameMs = IguanodonNativeBridge.nativeRenderFrameByteArray(
+        latestFrameMs = IguanodonNativeBridge.renderFrameByteArray(
             nativeHandle,
             dtSeconds,
             viewportWidth,
@@ -586,7 +466,7 @@ class IguanodonSession(
 
     override fun close() {
         if (nativeHandle != 0L) {
-            IguanodonNativeBridge.nativeDestroy(nativeHandle)
+            IguanodonNativeBridge.destroyEngine(nativeHandle)
             nativeHandle = 0L
         }
     }

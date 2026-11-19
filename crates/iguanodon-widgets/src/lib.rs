@@ -35,7 +35,38 @@ use iguanodon_text::{
 };
 use iguanodon_theme::{InteractionShaderKind, ThemeDescriptor, ThemeId, ThemeMode};
 pub use iguanodon_vk::{GpuImageTexture, VulkanRenderer};
-use std::time::Instant;
+
+#[cfg(not(target_arch = "wasm32"))]
+struct FrameTimer(std::time::Instant);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FrameTimer {
+    #[inline]
+    fn now() -> Self {
+        Self(std::time::Instant::now())
+    }
+
+    #[inline]
+    fn elapsed_secs_f32(&self) -> f32 {
+        self.0.elapsed().as_secs_f32()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct FrameTimer;
+
+#[cfg(target_arch = "wasm32")]
+impl FrameTimer {
+    #[inline]
+    fn now() -> Self {
+        Self
+    }
+
+    #[inline]
+    fn elapsed_secs_f32(&self) -> f32 {
+        0.0
+    }
+}
 
 /// Emits GPU glyph atlas quad instances (`ShaderMaterialId::GlyphAtlas`) for `text` at `pos`
 /// clipped to `clip`.
@@ -2773,16 +2804,16 @@ impl StandardBenchmarkApp {
         framebuffer_h: u32,
         framebuffer_rgba: &mut Vec<u8>,
     ) -> FrameSample {
-        let frame_start = Instant::now();
+        let frame_start = FrameTimer::now();
         self.step_animations(dt);
 
-        let layout_start = Instant::now();
+        let layout_start = FrameTimer::now();
         self.rebuild_layout();
-        let layout_us = layout_start.elapsed().as_secs_f32() * 1_000_000.0;
+        let layout_us = layout_start.elapsed_secs_f32() * 1_000_000.0;
 
-        let pack_start = Instant::now();
+        let pack_start = FrameTimer::now();
         let (gpu_instances, materialized_nodes) = self.build_complete_gpu_instances();
-        let sdf_pack_us = pack_start.elapsed().as_secs_f32() * 1_000_000.0;
+        let sdf_pack_us = pack_start.elapsed_secs_f32() * 1_000_000.0;
 
         let vk_stats = vk.render_frame(
             &gpu_instances,
@@ -2811,7 +2842,7 @@ impl StandardBenchmarkApp {
             }
         }
 
-        let total_frame_ms = frame_start.elapsed().as_secs_f32() * 1_000.0;
+        let total_frame_ms = frame_start.elapsed_secs_f32() * 1_000.0;
         let sample = FrameSample {
             total_frame_ms,
             ffi_decode_us: 12.0,
@@ -4719,25 +4750,25 @@ impl IguanodonTestHarness {
     /// `vkQueuePresentKHR`. Works identically for both `StandardBenchmarkApp` and any custom
     /// `@Composable` app tree managed by `IguanodonApplier`.
     pub fn render_and_present(&mut self, dt: f32, width: u32, height: u32) -> FrameSample {
-        let frame_start = Instant::now();
+        let frame_start = FrameTimer::now();
         self.resize(width as f32, height as f32);
         self.app.step_animations(dt);
         self.applier_scene.step_animations(dt);
 
-        let layout_start = Instant::now();
+        let layout_start = FrameTimer::now();
         self.app.rebuild_layout();
         self.applier_scene
             .recompute_layout(width as f32, height as f32);
-        let layout_us = layout_start.elapsed().as_secs_f32() * 1_000_000.0;
+        let layout_us = layout_start.elapsed_secs_f32() * 1_000_000.0;
 
-        let pack_start = Instant::now();
+        let pack_start = FrameTimer::now();
         let (gpu_instances, materialized_nodes) = if self.applier_scene.is_custom_app_scene() {
             self.applier_scene
                 .build_gpu_instances(self.app.viewport, &self.app.current_theme)
         } else {
             self.app.build_complete_gpu_instances()
         };
-        let sdf_pack_us = pack_start.elapsed().as_secs_f32() * 1_000_000.0;
+        let sdf_pack_us = pack_start.elapsed_secs_f32() * 1_000_000.0;
 
         let vk_stats_opt = self.vk.render_and_present(
             &gpu_instances,
@@ -4748,7 +4779,7 @@ impl IguanodonTestHarness {
             height,
         );
 
-        let work_ms = frame_start.elapsed().as_secs_f32() * 1_000.0;
+        let work_ms = frame_start.elapsed_secs_f32() * 1_000.0;
         let paced_interval_ms = self.app.target_frame_interval_sec() * 1_000.0;
         let dt_ms = if dt > 0.0005 && dt < 0.25 {
             dt * 1_000.0
@@ -4783,19 +4814,19 @@ impl IguanodonTestHarness {
     pub fn render_frame_rgba(&mut self, dt: f32, width: u32, height: u32) -> FrameSample {
         self.resize(width as f32, height as f32);
         if self.applier_scene.is_custom_app_scene() {
-            let frame_start = Instant::now();
+            let frame_start = FrameTimer::now();
             self.app.step_animations(dt);
         self.applier_scene.step_animations(dt);
-            let layout_start = Instant::now();
+            let layout_start = FrameTimer::now();
             self.applier_scene
                 .recompute_layout(width as f32, height as f32);
-            let layout_us = layout_start.elapsed().as_secs_f32() * 1_000_000.0;
+            let layout_us = layout_start.elapsed_secs_f32() * 1_000_000.0;
 
-            let pack_start = Instant::now();
+            let pack_start = FrameTimer::now();
             let (gpu_instances, materialized_nodes) = self
                 .applier_scene
                 .build_gpu_instances(self.app.viewport, &self.app.current_theme);
-            let sdf_pack_us = pack_start.elapsed().as_secs_f32() * 1_000_000.0;
+            let sdf_pack_us = pack_start.elapsed_secs_f32() * 1_000_000.0;
 
             let vk_stats = self.vk.render_frame(
                 &gpu_instances,
@@ -4806,7 +4837,7 @@ impl IguanodonTestHarness {
                 height,
                 &mut self.framebuffer_rgba,
             );
-            let total_frame_ms = frame_start.elapsed().as_secs_f32() * 1_000.0;
+            let total_frame_ms = frame_start.elapsed_secs_f32() * 1_000.0;
             let sample = FrameSample {
                 total_frame_ms,
                 ffi_decode_us: 12.0,

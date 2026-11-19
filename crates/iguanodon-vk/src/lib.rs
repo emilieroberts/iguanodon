@@ -3937,6 +3937,19 @@ impl VulkanRenderer {
             .filter_map(|inst| {
                 let (mat, border_eff) =
                     iguanodon_shaders::unpack_material_and_border(inst.params[3]);
+                // When `jellyfish_field` is already filling the full-screen backdrop via the
+                // fast 16x16 fixed-point LUT, skip a redundant full-viewport ElectricJellyfish
+                // backdrop instance (needed only by the hardware Vulkan fragment shader).
+                if jellyfish_field.is_some()
+                    && mat == iguanodon_shaders::ShaderMaterialId::ElectricJellyfish as u32
+                    && border_eff == iguanodon_shaders::BorderShaderEffect::None
+                    && inst.rect[0] <= 0.5
+                    && inst.rect[1] <= 0.5
+                    && inst.rect[2] >= width as f32 - 1.0
+                    && inst.rect[3] >= height as f32 - 1.0
+                {
+                    return None;
+                }
                 let has_fire_border = border_eff == iguanodon_shaders::BorderShaderEffect::FireBorder
                     || mat == iguanodon_shaders::ShaderMaterialId::ProceduralFire as u32
                     || (inst.params[0] > 0.0
@@ -4534,8 +4547,9 @@ impl VulkanRenderer {
             }
         };
 
-        // Avoid spawning OS threads on standard desktop window sizes (< 1.5M pixels),
-        // eliminating ~2,000 pthread_create/clone syscalls per second across all cores.
+        // Avoid spawning OS threads on standard desktop window sizes (< 1.5M pixels)
+        // or on WebAssembly (`wasm32-unknown-unknown`) where OS thread spawning is unavailable.
+        #[cfg(not(target_arch = "wasm32"))]
         if total_pixels >= 1_500_000 && height >= 16 {
             let num_threads = std::thread::available_parallelism()
                 .map(|n| n.get())
@@ -4552,9 +4566,9 @@ impl VulkanRenderer {
                     });
                 }
             });
-        } else {
-            render_band(0, target_rgba);
+            return;
         }
+        render_band(0, target_rgba);
     }
 }
 

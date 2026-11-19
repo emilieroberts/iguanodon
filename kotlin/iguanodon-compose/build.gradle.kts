@@ -44,6 +44,9 @@ kotlin {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
     }
+    js(IR) {
+        browser()
+    }
 
     sourceSets {
         val commonMain by getting {
@@ -54,14 +57,19 @@ kotlin {
                 api(libs.kotlinx.serialization.json)
             }
         }
+        val jvmAndAndroidMain by creating {
+            dependsOn(commonMain)
+        }
         if (hasAndroidSdk) {
             val androidMain by getting {
+                dependsOn(jvmAndAndroidMain)
                 dependencies {
                     implementation(libs.kotlinx.coroutines.android)
                 }
             }
         }
         val desktopMain by getting {
+            dependsOn(jvmAndAndroidMain)
             dependencies {
                 implementation(libs.kotlinx.coroutines.swing)
             }
@@ -70,6 +78,9 @@ kotlin {
             dependencies {
                 implementation(kotlin("test"))
             }
+        }
+        val jsMain by getting {
+            dependsOn(commonMain)
         }
     }
 }

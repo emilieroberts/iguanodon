@@ -1508,7 +1508,7 @@ fun PerfOverlay(modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "🦖 $nativeStatus • ${String.format("%.2f", frameMs)}ms • ${targetFps}Hz",
+                text = "🦖 $nativeStatus • ${(frameMs * 100f).roundToInt() / 100f}ms • ${targetFps}Hz",
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Normal,

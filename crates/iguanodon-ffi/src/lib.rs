@@ -1179,7 +1179,49 @@ pub extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nativeCrea
     width: f32,
     height: f32,
 ) -> i64 {
-    iguanodon_engine_create(width, height) as i64
+    (iguanodon_engine_create(width, height) as usize) as i64
+}
+
+/// Allocates a contiguous zero-initialized byte buffer in WebAssembly / C linear memory so
+/// JS / Kotlin-Wasm / Kotlin-JS hosts can write binary command batches and read RGBA framebuffers
+/// with zero intermediate heap copies.
+#[no_mangle]
+pub extern "C" fn iguanodon_wasm_alloc(byte_len: usize) -> *mut u8 {
+    if byte_len == 0 || byte_len > MAX_FFI_BATCH_BYTES {
+        return std::ptr::null_mut();
+    }
+    let mut buf = vec![0_u8; byte_len].into_boxed_slice();
+    let ptr = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    ptr
+}
+
+/// Returns a read-only pointer to the engine's internal RGBA framebuffer (`fb_width * fb_height * 4`
+/// bytes) after [`iguanodon_render_frame`] or [`iguanodon_render_frame_rgba`], allowing WebAssembly
+/// `<canvas>` hosts to construct an `ImageData` view directly over WASM linear memory with zero copy.
+///
+/// # Safety
+/// `engine_ptr` must be a valid pointer returned by [`iguanodon_engine_create`].
+#[no_mangle]
+pub unsafe extern "C" fn iguanodon_framebuffer_ptr(
+    engine_ptr: *const IguanodonTestHarness,
+) -> *const u8 {
+    if engine_ptr.is_null() {
+        return std::ptr::null();
+    }
+    (*engine_ptr).framebuffer_rgba.as_ptr()
+}
+
+/// Frees a byte buffer previously allocated with [`iguanodon_wasm_alloc`].
+///
+/// # Safety
+/// `ptr` and `byte_len` must match a live allocation returned by [`iguanodon_wasm_alloc`].
+#[no_mangle]
+pub unsafe extern "C" fn iguanodon_wasm_free(ptr: *mut u8, byte_len: usize) {
+    if !ptr.is_null() && byte_len > 0 && byte_len <= MAX_FFI_BATCH_BYTES {
+        let slice = slice::from_raw_parts_mut(ptr, byte_len);
+        drop(Box::from_raw(slice));
+    }
 }
 
 /// # Safety
@@ -1192,7 +1234,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     width: f32,
     height: f32,
 ) {
-    iguanodon_engine_resize(handle as *mut IguanodonTestHarness, width, height);
+    iguanodon_engine_resize((handle as usize) as *mut IguanodonTestHarness, width, height);
 }
 
 /// # Safety
@@ -1208,7 +1250,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     bottom: f32,
 ) {
     iguanodon_set_safe_insets(
-        handle as *mut IguanodonTestHarness,
+        (handle as usize) as *mut IguanodonTestHarness,
         left,
         top,
         right,
@@ -1227,7 +1269,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     byte_len: i32,
 ) -> i32 {
     iguanodon_flush_commands(
-        handle as *mut IguanodonTestHarness,
+        (handle as usize) as *mut IguanodonTestHarness,
         direct_buf_ptr as *const u8,
         byte_len.max(0) as usize,
     )
@@ -1270,7 +1312,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     let mut temp = vec![0_u8; len as usize];
     get_byte_array_region(env, jbyte_array, 0, len, temp.as_mut_ptr());
     iguanodon_flush_commands(
-        handle as *mut IguanodonTestHarness,
+        (handle as usize) as *mut IguanodonTestHarness,
         temp.as_ptr(),
         temp.len(),
     )
@@ -1286,7 +1328,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     x: f32,
     y: f32,
 ) {
-    iguanodon_pointer_move(handle as *mut IguanodonTestHarness, x, y);
+    iguanodon_pointer_move((handle as usize) as *mut IguanodonTestHarness, x, y);
 }
 
 /// # Safety
@@ -1301,7 +1343,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     is_right_or_long_press: u8,
 ) {
     iguanodon_pointer_down(
-        handle as *mut IguanodonTestHarness,
+        (handle as usize) as *mut IguanodonTestHarness,
         x,
         y,
         is_right_or_long_press != 0,
@@ -1318,7 +1360,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     x: f32,
     y: f32,
 ) {
-    iguanodon_pointer_up(handle as *mut IguanodonTestHarness, x, y);
+    iguanodon_pointer_up((handle as usize) as *mut IguanodonTestHarness, x, y);
 }
 
 /// # Safety
@@ -1332,7 +1374,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     y: f32,
     delta_y: f32,
 ) {
-    iguanodon_scroll_wheel(handle as *mut IguanodonTestHarness, x, y, delta_y);
+    iguanodon_scroll_wheel((handle as usize) as *mut IguanodonTestHarness, x, y, delta_y);
 }
 
 /// # Safety
@@ -1344,7 +1386,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     handle: i64,
     codepoint: i32,
 ) {
-    iguanodon_key_char(handle as *mut IguanodonTestHarness, codepoint as u32);
+    iguanodon_key_char((handle as usize) as *mut IguanodonTestHarness, codepoint as u32);
 }
 
 /// # Safety
@@ -1355,7 +1397,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     _class: *mut std::ffi::c_void,
     handle: i64,
 ) {
-    iguanodon_key_backspace(handle as *mut IguanodonTestHarness);
+    iguanodon_key_backspace((handle as usize) as *mut IguanodonTestHarness);
 }
 
 /// # Safety
@@ -1371,7 +1413,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     direct_rgba_ptr: i64,
 ) -> f32 {
     iguanodon_render_frame_rgba(
-        handle as *mut IguanodonTestHarness,
+        (handle as usize) as *mut IguanodonTestHarness,
         dt_sec,
         width.max(1) as u32,
         height.max(1) as u32,
@@ -1399,7 +1441,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     if handle == 0 {
         return 0;
     }
-    let harness = &mut *(handle as *mut IguanodonTestHarness);
+    let harness = &mut *((handle as usize) as *mut IguanodonTestHarness);
     harness.vk.detach_surface();
 
     #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -1469,7 +1511,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
         return 0.0;
     }
     iguanodon_render_and_present(
-        handle as *mut IguanodonTestHarness,
+        (handle as usize) as *mut IguanodonTestHarness,
         dt_sec,
         width as u32,
         height as u32,
@@ -1493,7 +1535,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     if handle == 0 || width <= 0 || height <= 0 {
         return 0.0;
     }
-    let harness = &mut *(handle as *mut IguanodonTestHarness);
+    let harness = &mut *((handle as usize) as *mut IguanodonTestHarness);
     let w = (width as u32).min(MAX_FRAMEBUFFER_DIM);
     let h = (height as u32).min(MAX_FRAMEBUFFER_DIM);
     let sample = harness.render_frame_rgba(dt_sec, w, h);
@@ -1539,7 +1581,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     capacity: i32,
 ) -> i32 {
     iguanodon_engine_poll_events(
-        handle as *mut IguanodonTestHarness,
+        (handle as usize) as *mut IguanodonTestHarness,
         direct_buf_ptr as *mut u8,
         capacity.max(0) as usize,
     ) as i32
@@ -1559,7 +1601,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     if handle == 0 || env.is_null() || (*env).is_null() || out_byte_array.is_null() {
         return 0;
     }
-    let harness = &mut *(handle as *mut IguanodonTestHarness);
+    let harness = &mut *((handle as usize) as *mut IguanodonTestHarness);
     if harness.pending_reverse_events.is_empty() {
         return 0;
     }
@@ -1602,7 +1644,7 @@ pub unsafe extern "C" fn Java_iguanodon_compose_bridge_IguanodonNativeBridge_nat
     _class: *mut std::ffi::c_void,
     handle: i64,
 ) {
-    iguanodon_engine_destroy(handle as *mut IguanodonTestHarness);
+    iguanodon_engine_destroy((handle as usize) as *mut IguanodonTestHarness);
 }
 
 #[cfg(test)]

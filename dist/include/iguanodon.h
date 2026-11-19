@@ -122,6 +122,10 @@ float iguanodon_render_frame_rgba(
     uint8_t* out_rgba_ptr
 );
 
+const uint8_t* iguanodon_framebuffer_ptr(const IguanodonEngine* engine_ptr);
+uint8_t* iguanodon_wasm_alloc(size_t byte_len);
+void iguanodon_wasm_free(uint8_t* ptr, size_t byte_len);
+
 #ifdef __cplusplus
 }
 #endif

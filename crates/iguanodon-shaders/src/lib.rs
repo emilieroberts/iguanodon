@@ -891,137 +891,148 @@ impl WaterDropWallpaper {
         ];
 
         let mut pixels_rgb = vec![[0_u8; 3]; (width * height) as usize];
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8)
-            .clamp(2, 24);
-        let rows_per_band = ((height as usize + num_threads - 1) / num_threads).max(1);
-        let px_per_band = rows_per_band * (width as usize);
+        let render_droplet_band = |y_start: u32, band_slice: &mut [[u8; 3]]| {
+            let band_h = (band_slice.len() / width as usize) as u32;
+            for local_y in 0..band_h {
+                let y = y_start + local_y;
+                let v = (y as f32 + 0.5) / height as f32;
+                let row_off = (local_y * width) as usize;
+                for x in 0..width {
+                    let u = (x as f32 + 0.5) / width as f32;
+                    let mut col = Self::evaluate_macro_background(u, v);
 
-        std::thread::scope(|s| {
-            for (band_idx, band_slice) in pixels_rgb.chunks_mut(px_per_band).enumerate() {
-                let y_start = (band_idx * rows_per_band) as u32;
-                let band_h = (band_slice.len() / width as usize) as u32;
-                s.spawn(move || {
-                    for local_y in 0..band_h {
-                        let y = y_start + local_y;
-                        let v = (y as f32 + 0.5) / height as f32;
-                        let row_off = (local_y * width) as usize;
-                        for x in 0..width {
-                            let u = (x as f32 + 0.5) / width as f32;
-                            let mut col = Self::evaluate_macro_background(u, v);
+                    // Composite 3D ray-traced water droplets (contact shadow + lens refraction + caustics + specular)
+                    for &(dx_c, dy_c, rad, elong_x) in &DROPS {
+                        let ly = v - dy_c;
+                        if ly.abs() >= rad * 1.28 {
+                            continue;
+                        }
+                        let lx = (u - dx_c) * aspect / elong_x;
+                        if lx.abs() >= rad * 1.28 {
+                            continue;
+                        }
+                        let r_norm = (lx * lx + ly * ly).sqrt() / rad;
 
-                            // Composite 3D ray-traced water droplets (contact shadow + lens refraction + caustics + specular)
-                            for &(dx_c, dy_c, rad, elong_x) in &DROPS {
-                                let ly = v - dy_c;
-                                if ly.abs() >= rad * 1.28 {
-                                    continue;
+                        if r_norm < 1.28 {
+                            if r_norm >= 1.0 {
+                                // Soft exterior contact ambient-occlusion & directional shadow (lower-right)
+                                let sh_x = lx - 0.14 * rad;
+                                let sh_y = ly - 0.18 * rad;
+                                let sh_r = (sh_x * sh_x + sh_y * sh_y).sqrt() / rad;
+                                if sh_r < 1.24 {
+                                    let falloff =
+                                        (1.0 - (r_norm - 1.0) / 0.28).clamp(0.0, 1.0);
+                                    let shadow_strength = falloff * falloff * 0.36;
+                                    col[0] *= 1.0 - shadow_strength;
+                                    col[1] *= 1.0 - shadow_strength;
+                                    col[2] *= 1.0 - shadow_strength;
                                 }
-                                let lx = (u - dx_c) * aspect / elong_x;
-                                if lx.abs() >= rad * 1.28 {
-                                    continue;
-                                }
-                                let r_norm = (lx * lx + ly * ly).sqrt() / rad;
+                            } else {
+                                // Inside the 3D water droplet hemisphere
+                                let nx = lx / rad;
+                                let ny = ly / rad;
+                                let nz = (1.0 - (nx * nx + ny * ny).min(1.0)).sqrt();
 
-                                if r_norm < 1.28 {
-                                    if r_norm >= 1.0 {
-                                        // Soft exterior contact ambient-occlusion & directional shadow (lower-right)
-                                        let sh_x = lx - 0.14 * rad;
-                                        let sh_y = ly - 0.18 * rad;
-                                        let sh_r = (sh_x * sh_x + sh_y * sh_y).sqrt() / rad;
-                                        if sh_r < 1.24 {
-                                            let falloff =
-                                                (1.0 - (r_norm - 1.0) / 0.28).clamp(0.0, 1.0);
-                                            let shadow_strength = falloff * falloff * 0.36;
-                                            col[0] *= 1.0 - shadow_strength;
-                                            col[1] *= 1.0 - shadow_strength;
-                                            col[2] *= 1.0 - shadow_strength;
-                                        }
-                                    } else {
-                                        // Inside the 3D water droplet hemisphere
-                                        let nx = lx / rad;
-                                        let ny = ly / rad;
-                                        let nz = (1.0 - (nx * nx + ny * ny).min(1.0)).sqrt();
+                                // Convex water lens refraction (IOR = 1.333)
+                                let refract_scale = 0.55 + 0.45 * nz;
+                                let ref_u =
+                                    (dx_c - (u - dx_c) * refract_scale).clamp(0.0, 1.0);
+                                let ref_v =
+                                    (dy_c - (v - dy_c) * refract_scale).clamp(0.0, 1.0);
+                                let mut refracted =
+                                    Self::evaluate_macro_background(ref_u, ref_v);
 
-                                        // Convex water lens refraction (IOR = 1.333)
-                                        let refract_scale = 0.55 + 0.45 * nz;
-                                        let ref_u =
-                                            (dx_c - (u - dx_c) * refract_scale).clamp(0.0, 1.0);
-                                        let ref_v =
-                                            (dy_c - (v - dy_c) * refract_scale).clamp(0.0, 1.0);
-                                        let mut refracted =
-                                            Self::evaluate_macro_background(ref_u, ref_v);
+                                // Bright crystal aqua-cyan magnification boost inside the drop
+                                refracted[0] = (refracted[0] * 1.06 + 0.06).min(1.0);
+                                refracted[1] = (refracted[1] * 1.16 + 0.08).min(1.0);
+                                refracted[2] = (refracted[2] * 1.20 + 0.10).min(1.0);
 
-                                        // Bright crystal aqua-cyan magnification boost inside the drop
-                                        refracted[0] = (refracted[0] * 1.06 + 0.06).min(1.0);
-                                        refracted[1] = (refracted[1] * 1.16 + 0.08).min(1.0);
-                                        refracted[2] = (refracted[2] * 1.20 + 0.10).min(1.0);
+                                // Internal focused sunlit caustic crescent on the lower-right side of the drop
+                                let caustic_dir = (nx * 0.58 + ny * 0.68).max(0.0);
+                                let caustic =
+                                    caustic_dir.powi(3) * (1.0 - nz * 0.45) * 0.72;
+                                refracted[0] += caustic * 0.70;
+                                refracted[1] += caustic * 0.94;
+                                refracted[2] += caustic * 1.00;
 
-                                        // Internal focused sunlit caustic crescent on the lower-right side of the drop
-                                        let caustic_dir = (nx * 0.58 + ny * 0.68).max(0.0);
-                                        let caustic =
-                                            caustic_dir.powi(3) * (1.0 - nz * 0.45) * 0.72;
-                                        refracted[0] += caustic * 0.70;
-                                        refracted[1] += caustic * 0.94;
-                                        refracted[2] += caustic * 1.00;
+                                // Schlick Fresnel rim reflection
+                                let fresnel = 0.02 + 0.98 * (1.0 - nz).powi(4);
+                                let sky_rim = [0.78_f32, 0.95, 1.00];
 
-                                        // Schlick Fresnel rim reflection
-                                        let fresnel = 0.02 + 0.98 * (1.0 - nz).powi(4);
-                                        let sky_rim = [0.78_f32, 0.95, 1.00];
+                                // Dual studio softbox specular highlights (upper-left primary + lower-right rim)
+                                let h1_dot = (-nx * 0.52 - ny * 0.60 + nz * 0.61).max(0.0);
+                                let spec_sharp = h1_dot.powi(46) * 1.45;
+                                let spec_glow = h1_dot.powi(10) * 0.35;
 
-                                        // Dual studio softbox specular highlights (upper-left primary + lower-right rim)
-                                        let h1_dot = (-nx * 0.52 - ny * 0.60 + nz * 0.61).max(0.0);
-                                        let spec_sharp = h1_dot.powi(46) * 1.45;
-                                        let spec_glow = h1_dot.powi(10) * 0.35;
+                                let h2_dot = (nx * 0.48 + ny * 0.52 + nz * 0.70).max(0.0);
+                                let spec_rim = h2_dot.powi(26) * 0.42;
 
-                                        let h2_dot = (nx * 0.48 + ny * 0.52 + nz * 0.70).max(0.0);
-                                        let spec_rim = h2_dot.powi(26) * 0.42;
+                                // Delicate meniscus edge right at r_norm -> 1.0
+                                let edge_darken = 1.0 - 0.22 * r_norm.powi(6);
 
-                                        // Delicate meniscus edge right at r_norm -> 1.0
-                                        let edge_darken = 1.0 - 0.22 * r_norm.powi(6);
+                                let mut dr = (refracted[0] * (1.0 - fresnel * 0.55)
+                                    + sky_rim[0] * fresnel * 0.55)
+                                    * edge_darken
+                                    + spec_sharp
+                                    + spec_glow * 0.75
+                                    + spec_rim * 0.6;
+                                let mut dg = (refracted[1] * (1.0 - fresnel * 0.55)
+                                    + sky_rim[1] * fresnel * 0.55)
+                                    * edge_darken
+                                    + spec_sharp
+                                    + spec_glow * 0.92
+                                    + spec_rim * 0.85;
+                                let mut db = (refracted[2] * (1.0 - fresnel * 0.55)
+                                    + sky_rim[2] * fresnel * 0.55)
+                                    * edge_darken
+                                    + spec_sharp
+                                    + spec_glow
+                                    + spec_rim;
 
-                                        let mut dr = (refracted[0] * (1.0 - fresnel * 0.55)
-                                            + sky_rim[0] * fresnel * 0.55)
-                                            * edge_darken
-                                            + spec_sharp
-                                            + spec_glow * 0.75
-                                            + spec_rim * 0.6;
-                                        let mut dg = (refracted[1] * (1.0 - fresnel * 0.55)
-                                            + sky_rim[1] * fresnel * 0.55)
-                                            * edge_darken
-                                            + spec_sharp
-                                            + spec_glow * 0.92
-                                            + spec_rim * 0.85;
-                                        let mut db = (refracted[2] * (1.0 - fresnel * 0.55)
-                                            + sky_rim[2] * fresnel * 0.55)
-                                            * edge_darken
-                                            + spec_sharp
-                                            + spec_glow
-                                            + spec_rim;
+                                dr = dr.clamp(0.0, 1.0);
+                                dg = dg.clamp(0.0, 1.0);
+                                db = db.clamp(0.0, 1.0);
 
-                                        dr = dr.clamp(0.0, 1.0);
-                                        dg = dg.clamp(0.0, 1.0);
-                                        db = db.clamp(0.0, 1.0);
-
-                                        // Anti-aliased droplet boundary (sharper for 1920x1080)
-                                        let aa = ((1.0 - r_norm) * 32.0).clamp(0.0, 1.0);
-                                        col[0] = col[0] * (1.0 - aa) + dr * aa;
-                                        col[1] = col[1] * (1.0 - aa) + dg * aa;
-                                        col[2] = col[2] * (1.0 - aa) + db * aa;
-                                    }
-                                }
+                                // Anti-aliased droplet boundary (sharper for 1920x1080)
+                                let aa = ((1.0 - r_norm) * 32.0).clamp(0.0, 1.0);
+                                col[0] = col[0] * (1.0 - aa) + dr * aa;
+                                col[1] = col[1] * (1.0 - aa) + dg * aa;
+                                col[2] = col[2] * (1.0 - aa) + db * aa;
                             }
-
-                            band_slice[row_off + x as usize] = [
-                                (col[0].clamp(0.0, 1.0) * 255.0) as u8,
-                                (col[1].clamp(0.0, 1.0) * 255.0) as u8,
-                                (col[2].clamp(0.0, 1.0) * 255.0) as u8,
-                            ];
                         }
                     }
-                });
+
+                    band_slice[row_off + x as usize] = [
+                        (col[0].clamp(0.0, 1.0) * 255.0) as u8,
+                        (col[1].clamp(0.0, 1.0) * 255.0) as u8,
+                        (col[2].clamp(0.0, 1.0) * 255.0) as u8,
+                    ];
+                }
             }
-        });
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let num_threads = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(8)
+                .clamp(2, 24);
+            let rows_per_band = ((height as usize + num_threads - 1) / num_threads).max(1);
+            let px_per_band = rows_per_band * (width as usize);
+
+            std::thread::scope(|s| {
+                for (band_idx, band_slice) in pixels_rgb.chunks_mut(px_per_band).enumerate() {
+                    let y_start = (band_idx * rows_per_band) as u32;
+                    s.spawn(move || {
+                        render_droplet_band(y_start, band_slice);
+                    });
+                }
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            render_droplet_band(0, &mut pixels_rgb);
+        }
 
         Self {
             width,
